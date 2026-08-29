@@ -257,7 +257,9 @@ export class Game {
     this.approachTorches.name = 'yard-braziers';
     const flameTex = makeFlameTexture();
     for (let i = 0; i < 11; i += 1) {
-      const a = (i / 11) * Math.PI * 2 + 0.35;
+      // North half only — the south lane stays clear so the horde river
+      // reads against open ground (vision round feedback).
+      const a = Math.PI + ((i + 0.5) / 11) * Math.PI + 0.35;
       const radius = 13 + (i % 3) * 3.2;
       const tx = this.bunkerX + Math.cos(a) * radius;
       const tz = this.bunkerZ + Math.sin(a) * radius;
@@ -348,8 +350,10 @@ export class Game {
     });
     this.announcedBrute = false;
     this.waveSpawnTimer = 0;
-    // The horde surrounds the palace — each wave picks a new compass arc.
-    this.waveBearing = this.rng() * Math.PI * 2;
+    // The horde pours up the SOUTH axis into the yard — the telephoto rig
+    // faces it dead-on. A narrow entry arc (±20°) keeps the river readable
+    // instead of a 360° drip.
+    this.waveBearing = (this.rng() - 0.5) * 0.7;
     this.hud.showWave(tide
       ? `제${index}파 대격노 — 원귀의 강이 넘친다`
       : `제${index}파 — [${this.directionName(this.waveBearing)}] 능선이 무너져 내려온다`);
@@ -389,7 +393,7 @@ export class Game {
           this.waveSpawnTimer = WAVE_TRICKLE;
           const batchMax = this.day % 5 === 0 ? 8 : 5;
           const batch = Math.min(this.waveSpawnQueue, 2 + Math.floor(this.rng() * (batchMax - 2)));
-          const spreadBearing = this.waveBearing + (this.rng() - 0.5) * 1.2;
+          const spreadBearing = this.waveBearing + (this.rng() - 0.5) * 0.6;
           // Convergence ring around the palace yard — inside the reserved
           // palace grounds, so no hanok stand in the horde's way.
           this.horde.spawnWave(batch, spreadBearing, this.day, 0.1 + this.day * 0.015, 1.0, undefined, [25, 47]);
@@ -657,6 +661,8 @@ export class Game {
     const dx = this.aimPoint.x - this.bunkerX;
     const dz = this.aimPoint.z - this.bunkerZ;
     const aimYaw = Math.abs(dx) + Math.abs(dz) > 0.5 ? Math.atan2(dx, dz) : 0;
+    // Feed the rig pan: the bearing from the gun to the aim ring.
+    if (Math.hypot(dx, dz) > 6) this.camYawTarget = Math.atan2(dx, dz);
     this.gunnerInstance?.setAim(aimYaw);
 
     if (this.aimRing) {
@@ -696,38 +702,49 @@ export class Game {
     const dollyBack = (1 - this.dollyEase) * (1 - this.dollyEase) * 5;
 
     const cam = this.world.camera;
-    // Palace-yard last stand — near-top-down framing: the camera hangs over
-    // the gatling at the yard's north edge and looks down the kill ring.
-    // The gun reads center-frame, the horde converges from every edge of
-    // the yard, and every press fires toward the touch point.
+    // Telephoto quarter view around the yard pivot: the camera orbits the
+    // gatling at a distance (gun reads SMALL, an anchor — not the subject),
+    // through a narrow lens (zombies at 15-40m read as full figures with
+    // horns/claws/stride), from ~29° above grade. The view PANS toward the
+    // aim with a deadzone — sweep the pointer to an edge to look around the
+    // ring; recentre to settle. D = orbit radius, H = eye height.
     const qv = this.compact
-      ? { dx: 0, height: 46, back: 12, lookZ: 10, lookDx: 0 }
-      : { dx: 0, height: 52, back: 15, fov: 48, lookZ: 13, lookDx: 0 };
-    // Portrait phones: a vertical-fov lens collapses the horizontal view to
-    // ~27° and the gate tower swallows the whole frame. Anchor the compact
-    // lens to ~55° HORIZONTAL and let the vertical angle follow the aspect
-    // (clamped to a sane band).
-    let baseFov = qv.fov ?? 54;
+      ? { dist: 28, height: 21, lookAhead: 7, fov: 0, hFov: 42 }
+      : { dist: 32, height: 24, lookAhead: 8, fov: 32, hFov: 0 };
+    let baseFov = qv.fov ?? 40;
     if (this.compact) {
       const aspect = Math.max(0.55, Math.min(2.2, this.canvas.clientWidth / Math.max(1, this.canvas.clientHeight)));
-      baseFov = (2 * Math.atan(Math.tan((55 * Math.PI) / 360) / aspect) * 180) / Math.PI;
-      baseFov = Math.min(78, Math.max(46, baseFov));
+      baseFov = (2 * Math.atan(Math.tan((qv.hFov * Math.PI) / 360) / aspect) * 180) / Math.PI;
+      baseFov = Math.min(72, Math.max(40, baseFov));
     }
     const targetFov = baseFov - this.fovPunch * 7;
     if (Math.abs(cam.fov - targetFov) > 0.01) {
       cam.fov = targetFov;
       cam.updateProjectionMatrix();
     }
+
+    // Aim-follow pan: rotate the orbit toward the aim bearing, deadzoned so
+    // the rig never chases its own tail (aim is raycast THROUGH this camera).
+    let dyaw = this.camYawTarget - this.camYaw;
+    dyaw = Math.atan2(Math.sin(dyaw), Math.cos(dyaw));
+    const deadzone = 0.17; // ~10°: pointer near centre = no pan
+    const beyond = Math.abs(dyaw) > deadzone ? dyaw - Math.sign(dyaw) * deadzone : 0;
+    const pan = Math.max(-2.2 * delta, Math.min(2.2 * delta, beyond * Math.min(1, delta * 3.2)));
+    this.camYaw += pan;
+
+    const dolly = qv.dist + dollyBack;
+    const fwdX = Math.sin(this.camYaw);
+    const fwdZ = Math.cos(this.camYaw);
     cam.position.set(
-      this.gunX + qv.dx + shake * 0.5 * pseudoNoise(freq, 1) + driftX,
+      this.gunX - fwdX * dolly + shake * 0.5 * pseudoNoise(freq, 1) + driftX,
       this.gunGroundY + qv.height + shake * 0.35 * pseudoNoise(freq, 2) + driftY,
-      this.gunZ - qv.back - dollyBack - driftZ,
+      this.gunZ - fwdZ * dolly + driftZ,
     );
     this.lookTarget.lerp(
       this.tmpV.set(
-        this.bunkerX + qv.lookDx + (this.aimPoint.x - this.bunkerX) * 0.14 + driftX * 0.6,
-        this.bunkerGroundY + 1,
-        this.bunkerZ + qv.lookZ + (this.aimPoint.z - qv.lookZ - this.bunkerZ) * 0.14,
+        this.bunkerX + fwdX * qv.lookAhead + driftX * 0.6,
+        this.bunkerGroundY + 2.2,
+        this.bunkerZ + fwdZ * qv.lookAhead,
       ),
       Math.min(1, delta * 4),
     );
@@ -773,6 +790,11 @@ export class Game {
 
   private fovPunch = 0;
   private dollyEase = 1;
+  /** Orbit yaw of the telephoto rig (-π/2 = looking west across the yard);
+   *  pans with aim. The east-side stand-off keeps the camera OUT of the
+   *  palace volume — shooting through it cost ~20fps of overdraw. */
+  private camYaw = -Math.PI / 2;
+  private camYawTarget = -Math.PI / 2;
   private cinemaBarsOn = false;
   // Final-blow kill cam: freeze, orbit the last launch, letterbox.
   private killCamTimer = 0;
@@ -1393,8 +1415,8 @@ export class Game {
           this.waveActive = true;
           this.day = 4;
           const dist = [25, 47] as const;
-          this.horde.spawnWave(150, this.rng() * Math.PI * 2, 4, 0.2, 0.55, { brute: 2, bloater: 6, shield: 8, runner: 10 }, dist);
-          this.horde.spawnWave(160, this.rng() * Math.PI * 2, 4, 0.2, 0.75, undefined, dist);
+          this.horde.spawnWave(150, (this.rng() - 0.5) * 0.8, 4, 0.2, 0.55, { brute: 2, bloater: 6, shield: 8, runner: 10 }, dist);
+          this.horde.spawnWave(160, (this.rng() - 0.5) * 0.8, 4, 0.2, 0.75, undefined, dist);
         } else if (name === 'bloodnight') {
           this.hideEndScreen();
           if (this.mode !== 'playing') this.beginRun();
