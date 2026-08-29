@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="theme-color" content="#060505" />
+    <meta name="description" content="새벽까지 — 궁 벙커의 개틀링으로 원귀의 강을 막아내는 1인칭 방어전" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='8' fill='%23060505'/%3E%3Ccircle cx='32' cy='38' r='14' fill='%23c8102e'/%3E%3Cpath d='M32 6 L38 26 L26 26 Z' fill='%23f4f1ea'/%3E%3C/svg%3E" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Song+Myung&family=Nanum+Brush+Script&display=swap" rel="stylesheet" />
+    <title>새벽까지 · 궁가의 밤</title>
+  </head>
+  <body>
+    <main id="app">
+      <canvas id="game-canvas" aria-label="새벽까지 게임 캔버스"></canvas>
+
+      <div id="damage-vignette" aria-hidden="true"></div>
+      <div id="cinema-bars" aria-hidden="true"><div class="cbar top"></div><div class="cbar bottom"></div></div>
+      <div id="speedlines" aria-hidden="true"></div>
+      <div id="impact-flash" aria-hidden="true"></div>
+      <div id="stamp" aria-hidden="true"><span id="stamp-char">巨</span><span id="stamp-sub"></span></div>
+      <div id="rank-layer" aria-hidden="true"><span id="rank-label"></span></div>
+      <div id="toast" aria-live="polite"></div>
+      <button id="mute-button" type="button" aria-label="소리 끄기" aria-pressed="false">소리</button>
+
+      <section id="hud" aria-live="polite" class="hidden">
+        <div id="hud-top">
+          <div id="wave-chip">
+            <span id="wave-label">제1파 · 남은 원귀 0</span>
+          </div>
+          <div class="tally">격살 <strong id="kill-value">0</strong></div>
+        </div>
+
+        <div id="bunker-cluster">
+          <span class="vitals-label">보루</span>
+          <div id="bunker-bar"><div id="bunker-fill"></div></div>
+          <strong id="bunker-value">1000</strong>
+        </div>
+
+        <div id="heat-cluster">
+          <div id="heat-bar"><div id="heat-fill"></div></div>
+          <span id="heat-label">대기</span>
+        </div>
+
+        <div id="wave-banner" aria-hidden="true"></div>
+        <div id="combo-badge" aria-hidden="true">연쇄 격살</div>
+      </section>
+
+      <div id="touch-controls" aria-hidden="true">
+        <button id="button-fire" type="button" aria-label="발사">발사</button>
+      </div>
+
+      <section id="title-screen" class="visible">
+        <div class="title-frame">
+          <p class="title-eyebrow">조선 원귀 방어전</p>
+          <h1 class="title-word">궁가의 밤</h1>
+          <p class="title-sub">
+            궁궐 한가운데, 돌벙커 위의 개틀링.<br />
+            어둠 속에서 원귀의 강이 밀려온다. 새벽까지 갈아 없애라.
+          </p>
+          <div class="title-actions">
+            <button id="start-button" type="button" disabled>궁을 세우는 중…</button>
+            <button id="reroll-button" type="button" disabled>다른 궁</button>
+          </div>
+          <p id="title-best" class="title-best" hidden></p>
+          <ul class="title-controls">
+            <li><b>조준</b> 마우스 / 터치로 지점 찍기</li>
+            <li><b>발사</b> 좌클릭 홀드 / 발사 버튼</li>
+            <li><b>주의</b> 과열 관리</li>
+          </ul>
+          <p id="title-loading" class="title-loading">궁을 세우는 중…</p>
+        </div>
+      </section>
+
+      <section id="end-screen">
+        <div class="title-frame">
+          <p id="record-badge" class="record-badge" hidden>신기록</p>
+          <h1 id="end-title">보루가 함락되었다</h1>
+          <p id="end-subtitle">제1파 · 격살 0</p>
+          <div id="end-stats">
+            <div class="stat"><span class="stat-label">격살</span><strong id="stat-kills">0</strong></div>
+            <div class="stat"><span class="stat-label">최고 연쇄</span><strong id="stat-combo">0</strong></div>
+            <div class="stat"><span class="stat-label">명중률</span><strong id="stat-acc">0%</strong></div>
+            <div class="stat"><span class="stat-label">생존</span><strong id="stat-time">0:00</strong></div>
+          </div>
+          <p id="end-best" class="title-loading">최고 격살 0</p>
+          <div class="title-actions">
+            <button id="retry-button" type="button">다시 (R)</button>
+            <button id="to-title-button" type="button">처음으로</button>
+          </div>
+          <div class="share-actions">
+            <button id="share-button" type="button">전적 공유</button>
+            <button id="shot-button" type="button">장면 저장</button>
+          </div>
+        </div>
+      </section>
+
+      <section id="upgrade-overlay">
+        <div class="upgrade-frame">
+          <p class="title-eyebrow">파를 막아냈다 · 하나를 얻는다</p>
+          <div class="upgrade-cards">
+            <button class="upgrade-card" id="upgrade-card-0" type="button">
+              <span class="upgrade-title">강화</span>
+              <span class="upgrade-desc">설명</span>
+            </button>
+            <button class="upgrade-card" id="upgrade-card-1" type="button">
+              <span class="upgrade-title">강화</span>
+              <span class="upgrade-desc">설명</span>
+            </button>
+            <button class="upgrade-card" id="upgrade-card-2" type="button">
+              <span class="upgrade-title">강화</span>
+              <span class="upgrade-desc">설명</span>
+            </button>
+          </div>
+          <p class="upgrade-hint">1 · 2 · 3 또는 카드를 누르시오</p>
+        </div>
+      </section>
+    </main>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
