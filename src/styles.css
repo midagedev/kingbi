@@ -216,35 +216,9 @@ canvas {
 }
 
 /* ── Touch controls ──────────────────────────────────────────────── */
-#touch-controls {
-  position: fixed;
-  inset: 0;
-  pointer-events: none;
-  display: none;
-}
 @media (pointer: coarse) {
-  #touch-controls { display: block; }
 }
 
-#button-fire {
-  position: absolute;
-  right: max(22px, env(safe-area-inset-right));
-  bottom: max(96px, calc(env(safe-area-inset-bottom) + 84px));
-  width: 108px;
-  height: 108px;
-  border-radius: 50%;
-  border: 2px solid rgba(244, 241, 234, 0.6);
-  background: radial-gradient(circle at 38% 32%, rgba(200, 16, 46, 0.92), rgba(70, 3, 12, 0.92));
-  color: #ffffff;
-  font-size: 17px;
-  font-weight: 800;
-  letter-spacing: 0.2em;
-  pointer-events: auto;
-  touch-action: none;
-}
-#button-fire:active {
-  background: radial-gradient(circle at 38% 32%, rgba(239, 25, 53, 1), rgba(120, 8, 22, 0.95));
-}
 
 /* ── Title / end screens ─────────────────────────────────────────── */
 #title-screen,

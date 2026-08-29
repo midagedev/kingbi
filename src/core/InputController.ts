@@ -4,8 +4,9 @@ export interface LookIntent {
 }
 
 /**
- * Quarter-view input: cursor/drag position aims on the ground plane,
- * hold-to-fire. No pointer lock, no camera rotation.
+ * Top-down yard input: pointer position aims on the ground plane, and
+ * pressing — mouse button or a finger on the play surface — fires toward
+ * that point. No separate fire button; no pointer lock; no camera rotation.
  */
 export class InputController {
   private pointerX = 0;
@@ -38,13 +39,22 @@ export class InputController {
     this.fireHeld = false;
   };
 
+  /** UI chrome (buttons, upgrade cards) must never count as firing. */
+  private isUiTarget(target: EventTarget | null): boolean {
+    return target instanceof Element && !!target.closest('button, a, .upgrade-card, #upgrade-choice');
+  }
+
   private readonly onPointerDown = (event: PointerEvent) => {
     if (event.pointerType !== 'touch') return;
     if (this.touchAimId !== null) return;
+    if (this.isUiTarget(event.target)) return;
     this.touchAimId = event.pointerId;
     this.pointerX = event.clientX;
     this.pointerY = event.clientY;
     this.hasPointer = true;
+    // Touch the yard, hose that direction — press IS the trigger.
+    this.fireHeld = true;
+    this.fireQueued = true;
   };
 
   private readonly onPointerMove = (event: PointerEvent) => {
@@ -55,24 +65,13 @@ export class InputController {
   };
 
   private readonly onPointerUp = (event: PointerEvent) => {
-    if (event.pointerId === this.touchAimId) this.touchAimId = null;
+    if (event.pointerId === this.touchAimId) {
+      this.touchAimId = null;
+      this.fireHeld = false;
+    }
   };
 
-  private bind(el: HTMLElement, onDown: (down: boolean) => void): void {
-    const down = (event: PointerEvent) => {
-      event.preventDefault();
-      onDown(true);
-    };
-    const up = (event: PointerEvent) => {
-      event.preventDefault();
-      onDown(false);
-    };
-    el.addEventListener('pointerdown', down);
-    el.addEventListener('pointerup', up);
-    el.addEventListener('pointercancel', up);
-  }
-
-  constructor(fireButton: HTMLElement) {
+  constructor() {
     window.addEventListener('mousemove', this.onMouseMove);
     window.addEventListener('mousedown', this.onMouseDown);
     window.addEventListener('mouseup', this.onMouseUp);
@@ -80,10 +79,7 @@ export class InputController {
     window.addEventListener('pointerdown', this.onPointerDown);
     window.addEventListener('pointermove', this.onPointerMove);
     window.addEventListener('pointerup', this.onPointerUp);
-    this.bind(fireButton, (down) => {
-      this.fireHeld = down;
-      if (down) this.fireQueued = true;
-    });
+    window.addEventListener('pointercancel', this.onPointerUp);
   }
 
   consumeLook(): LookIntent {
@@ -106,5 +102,6 @@ export class InputController {
     window.removeEventListener('pointerdown', this.onPointerDown);
     window.removeEventListener('pointermove', this.onPointerMove);
     window.removeEventListener('pointerup', this.onPointerUp);
+    window.removeEventListener('pointercancel', this.onPointerUp);
   }
 }

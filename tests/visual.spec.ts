@@ -71,22 +71,12 @@ test('renders a nonblank interactive game canvas', async ({ page }, testInfo) =>
   const before = await readFiring();
 
   await page.waitForFunction(() => (window.__THREE_GAME_DIAGNOSTICS__?.zombies ?? 0) > 6, null, { timeout: 20_000 });
-  if (testInfo.project.name.includes('mobile')) {
-    const fire = page.locator('#button-fire');
-    await expect(fire).toBeVisible();
-    const box = await fire.boundingBox();
-    if (box) {
-      await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
-      await page.mouse.down();
-      await page.waitForTimeout(1400);
-      await page.mouse.up();
-    }
-  } else {
-    await page.mouse.move(640, 360);
-    await page.mouse.down();
-    await page.waitForTimeout(1400);
-    await page.mouse.up();
-  }
+  // Press-to-fire everywhere: touch/click on the play surface aims AND fires
+  // toward that point — the dedicated fire button is gone by design.
+  await page.mouse.move(640, 360);
+  await page.mouse.down();
+  await page.waitForTimeout(1400);
+  await page.mouse.up();
   await page.waitForTimeout(300);
 
   const after = await readFiring();

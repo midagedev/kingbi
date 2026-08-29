@@ -48,6 +48,8 @@ export interface WorldQueries {
   randomRoadPoint(rng: () => number): THREE.Vector3;
   /** Pure-data 한양 성곽 contour, when the village generated one. */
   cityWallSpec(): import('@cheoma/api/village.js').CheomaCityWallSpec | null;
+  /** 궁궐 feature center, when the village generated a palace. */
+  palaceCenter(): { x: number; z: number } | null;
 }
 
 /**
@@ -222,6 +224,12 @@ export class World {
       cityWallSpec: () => {
         const spec = this.village?.plan?.features?.cityWall;
         return spec ?? null;
+      },
+      palaceCenter: () => {
+        const palace = this.village?.plan?.features?.palace;
+        return palace && Number.isFinite(palace.x) && Number.isFinite(palace.z)
+          ? { x: palace.x, z: palace.z }
+          : null;
       },
       obstacleRects: () => rects,
       randomRoadPoint: (rng: () => number): THREE.Vector3 => {

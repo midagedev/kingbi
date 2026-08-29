@@ -4,7 +4,6 @@ import { InputController } from '../core/InputController';
 import { World } from '../world/World';
 import { Horde, type ZombiePhase, type ZombieType } from '../entities/Horde';
 import { Gunner, makeFlameTexture } from '../entities/Gunner';
-import { CityFortress, WALL_WALK_HEIGHT } from '../entities/CityFortress';
 import { DebrisPool } from '../entities/DebrisPool';
 import { GibPool } from '../entities/GibPool';
 import { BloodYard } from '../entities/BloodYard';
@@ -49,7 +48,6 @@ export class Game {
   private readonly world: World;
   private readonly horde: Horde;
   private gunnerInstance: Gunner | null = null;
-  private fortress: CityFortress | null = null;
   /** Gatling emplacement: on the wall walk beside the south gate. */
   private gunX = 0;
   private gunZ = 0;
@@ -164,6 +162,7 @@ export class Game {
         obstacleRects: () => [],
         randomRoadPoint: () => new THREE.Vector3(),
         cityWallSpec: () => null,
+        palaceCenter: () => null,
       },
       this.compact ? 420 : 950,
       () => this.rng(),
@@ -179,7 +178,7 @@ export class Game {
       this.audio.roar();
     };
 
-    this.input = new InputController(this.getElement('#button-fire'));
+    this.input = new InputController();
 
     this.debugTools = new DebugTools(this.tuning, () => {
       this.world.renderer.toneMappingExposure = this.tuning.exposure;
@@ -225,71 +224,62 @@ export class Game {
     onReady(true, 'ready');
   }
 
-  /** Anchor the defense at the south gate of the cheoma 성곽: the gatling
-   *  sits on the wall walk beside the 문루, the horde pours up the gate
-   *  approach, and the whole walled city at our backs is what we protect. */
+  /** Anchor the defense in the 궁궐 앞마당 (palace front yard): a last-stand
+   *  in the open — no gate funnel, no walls in play. The horde converges
+   *  from every compass point toward the gatling in the yard; the camera
+   *  hangs almost overhead and every press fires toward the touch point. */
   private establishBunker(): void {
     const queries = this.world.queries();
-    const spec = queries.cityWallSpec();
-    this.fortress = spec ? new CityFortress(spec) : null;
-    this.horde.setFortress(this.fortress);
-    const gate = this.fortress?.southGate;
+    this.horde.setFortress(null);
+    const palace = queries.palaceCenter();
 
-    // The defended point is the gate mouth — claws, booms and the death
-    // breach all happen in the archway where the player can see them.
-    this.bunkerX = gate ? gate.x : 0;
-    this.bunkerZ = gate ? gate.z : 0;
+    // The front yard, south of the hall — open ground, palace at our back.
+    this.bunkerX = palace ? palace.x : 0;
+    this.bunkerZ = palace ? palace.z + 30 : 0;
     this.bunkerGroundY = queries.heightAt(this.bunkerX, this.bunkerZ);
+    this.gunX = this.bunkerX;
+    this.gunZ = this.bunkerZ;
+    this.gunGroundY = this.bunkerGroundY;
 
-    // Gatling on the parapet east of the gate, at wall-walk height.
-    const off = gate ? gate.width * 0.5 + 3.4 : 0;
-    this.gunX = gate ? gate.x + gate.dirZ * off : this.bunkerX;
-    this.gunZ = gate ? gate.z - gate.dirX * off : this.bunkerZ;
-    this.gunGroundY = queries.heightAt(this.gunX, this.gunZ) + (gate ? WALL_WALK_HEIGHT : 0);
-
-    // Keep the wall walk, the archway and the inside sightline clear.
-    this.world.clearObstaclesNear(this.bunkerX, this.bunkerZ, 10);
-    this.world.clearObstaclesNear(this.gunX, this.gunZ, 5);
-    this.world.clearObstaclesNear(this.gunX, this.gunZ - 20, 15);
+    // Keep the kill yard and its convergence ring clear of houses/props.
+    this.world.clearObstaclesNear(this.bunkerX, this.bunkerZ, 21);
+    this.world.clearObstaclesNear(this.bunkerX, this.bunkerZ + 26, 15);
 
     this.gunnerInstance?.dispose();
     this.gunnerInstance = new Gunner(this.world.scene, this.gunX, this.gunZ, this.gunGroundY);
 
     this.debris ??= new DebrisPool(this.world.scene);
 
-    // Approach torches: flame sprites flanking the gate road — the kill yard
-    // needs brightness anchors at night, and sprites carry them for free
-    // (no dynamic lights — see the light-budget doctrine).
+    // Brazier ring — the yard's brightness anchors at night (sprite-only,
+    // no dynamic lights — light-budget doctrine).
     this.approachTorches?.removeFromParent();
     this.approachTorches = new THREE.Group();
-    this.approachTorches.name = 'approach-torches';
+    this.approachTorches.name = 'yard-braziers';
     const flameTex = makeFlameTexture();
-    const gateDirX = gate?.dirZ ?? 0;
-    const gateDirZ = gate?.dirX ?? 1;
-    for (let i = 0; i < 7; i += 1) {
-      const along = 5 + i * 6.5;
-      const side = i % 2 === 0 ? 1 : -1;
-      for (const lane of [4.6, -4.6]) {
-        const tx = this.bunkerX + gateDirX * along + -gateDirZ * lane * (i % 2 === 0 ? 1 : 0.85);
-        const tz = this.bunkerZ + gateDirZ * along + gateDirX * lane * (i % 2 === 0 ? 1 : 0.85);
-        void side;
-        const torch = new THREE.Sprite(new THREE.SpriteMaterial({
-          map: flameTex,
-          blending: THREE.AdditiveBlending,
-          depthWrite: false,
-        }));
-        torch.scale.set(1.1, 1.7, 1);
-        torch.position.set(tx, queries.heightAt(tx, tz) + 1.7, tz);
-        this.approachTorches.add(torch);
-      }
+    for (let i = 0; i < 11; i += 1) {
+      const a = (i / 11) * Math.PI * 2 + 0.35;
+      const radius = 13 + (i % 3) * 3.2;
+      const tx = this.bunkerX + Math.cos(a) * radius;
+      const tz = this.bunkerZ + Math.sin(a) * radius;
+      const torch = new THREE.Sprite(new THREE.SpriteMaterial({
+        map: flameTex,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+      }));
+      torch.scale.set(1.15, 1.8, 1);
+      torch.position.set(tx, queries.heightAt(tx, tz) + 1.8, tz);
+      this.approachTorches.add(torch);
     }
     this.world.scene.add(this.approachTorches);
 
-    // The kill yard is the gate approach: every splatter stays on the road.
+    // The kill yard is the palace front yard: splatter stays where they fall.
     this.bloodYard?.dispose();
-    this.bloodYard = new BloodYard(this.world.scene, queries, gate
-      ? { minX: -30, maxX: 30, minZ: gate.z - 8, maxZ: gate.z + 60 }
-      : undefined);
+    this.bloodYard = new BloodYard(this.world.scene, queries, {
+      minX: this.bunkerX - 38,
+      maxX: this.bunkerX + 38,
+      minZ: this.bunkerZ - 32,
+      maxZ: this.bunkerZ + 42,
+    });
 
     if (!this.aimRing) {
       this.aimRing = new THREE.Mesh(
@@ -358,8 +348,8 @@ export class Game {
     });
     this.announcedBrute = false;
     this.waveSpawnTimer = 0;
-    // The river pours up the south gate approach — the 성문 is the funnel.
-    this.waveBearing = this.gateBearing() + (this.rng() - 0.5) * (this.compact ? 0.4 : 0.5);
+    // The horde surrounds the palace — each wave picks a new compass arc.
+    this.waveBearing = this.rng() * Math.PI * 2;
     this.hud.showWave(tide
       ? `제${index}파 대격노 — 원귀의 강이 넘친다`
       : `제${index}파 — [${this.directionName(this.waveBearing)}] 능선이 무너져 내려온다`);
@@ -383,15 +373,6 @@ export class Game {
     return names[index];
   }
 
-  /** Horde-convention bearing (x=cos, z=sin) from the city center through
-   *  the south gate — the horde's axis of attack. */
-  private gateBearing(): number {
-    const gate = this.fortress?.southGate;
-    const spec = this.world.queries().cityWallSpec();
-    if (!gate || !spec) return Math.PI * 0.5;
-    return Math.atan2(gate.z - spec.cz, gate.x - spec.cx);
-  }
-
   private updateWaves(delta: number): void {
     if (this.upgradeOpen) return;
     // The upgrade card waits for the kill cam to finish its beat.
@@ -408,16 +389,10 @@ export class Game {
           this.waveSpawnTimer = WAVE_TRICKLE;
           const batchMax = this.day % 5 === 0 ? 8 : 5;
           const batch = Math.min(this.waveSpawnQueue, 2 + Math.floor(this.rng() * (batchMax - 2)));
-          const spreadBearing = this.waveBearing + (this.rng() - 0.5) * 0.36;
-          // Spawn just beyond the wall ring at this bearing (the cheoma
-          // contour is wobbly — read the real local radius, not the mean).
-          const distRange = this.fortress
-            ? (() => {
-                const wallR = this.fortress!.radiusAt(Math.PI / 2 - spreadBearing);
-                return [wallR + 8, wallR + 19] as const;
-              })()
-            : undefined;
-          this.horde.spawnWave(batch, spreadBearing, this.day, 0.1 + this.day * 0.015, 1.0, undefined, distRange);
+          const spreadBearing = this.waveBearing + (this.rng() - 0.5) * 1.2;
+          // Convergence ring around the palace yard — inside the reserved
+          // palace grounds, so no hanok stand in the horde's way.
+          this.horde.spawnWave(batch, spreadBearing, this.day, 0.1 + this.day * 0.015, 1.0, undefined, [25, 47]);
           this.waveSpawnQueue -= batch;
         }
       } else if (this.horde.activeCount === 0) {
@@ -669,23 +644,14 @@ export class Game {
       }
     }
 
-    // Keep the ring on the gate approach: clamp distance, hold the south arc.
-    const maxAim = this.compact ? 34 : 44;
+    // Keep the ring inside the kill yard: a radial clamp, all directions.
+    const maxAim = this.compact ? 28 : 38;
     const adx = this.aimPoint.x - this.bunkerX;
     const adz = this.aimPoint.z - this.bunkerZ;
     const aimDist = Math.hypot(adx, adz);
     if (aimDist > maxAim) {
       this.aimPoint.x = this.bunkerX + (adx / aimDist) * maxAim;
       this.aimPoint.z = this.bunkerZ + (adz / aimDist) * maxAim;
-    }
-    // The kill yard is the approach (z south of the gate). Blasts can swing
-    // zombies behind the emplacement; those must stay targetable or waves
-    // softlock — but nothing north of the wall line matters.
-    if (this.aimPoint.z < this.bunkerZ - 8) {
-      this.aimPoint.z = this.bunkerZ - 8;
-    }
-    if (this.aimPoint.z > this.bunkerZ + 48) {
-      this.aimPoint.z = this.bunkerZ + 48;
     }
 
     const dx = this.aimPoint.x - this.bunkerX;
@@ -730,16 +696,13 @@ export class Game {
     const dollyBack = (1 - this.dollyEase) * (1 - this.dollyEase) * 5;
 
     const cam = this.world.camera;
-    // Rampart defense — FUNCTIONAL framing (post-live-feedback retune,
-    // 2026-08-30): the previous cinematographer angle (high, east-shoulder,
-    // 27m up) won beauty scores but the gatling left the frame and the
-    // approach direction stopped reading. The camera now hovers just over
-    // the gunner's shoulder ON the wall axis: gatling bottom-center, the
-    // gate road running up-frame, the horde visibly pouring TOWARD the
-    // player. Vision-judged grid: D-axis 8/10 (gun visible, direction reads).
+    // Palace-yard last stand — near-top-down framing: the camera hangs over
+    // the gatling at the yard's north edge and looks down the kill ring.
+    // The gun reads center-frame, the horde converges from every edge of
+    // the yard, and every press fires toward the touch point.
     const qv = this.compact
-      ? { dx: 0.5, height: 6, back: 9, lookZ: 12, lookDx: 0 }
-      : { dx: 0.5, height: 5, back: 10, fov: 49, lookZ: 15, lookDx: 0 };
+      ? { dx: 0, height: 46, back: 12, lookZ: 10, lookDx: 0 }
+      : { dx: 0, height: 52, back: 15, fov: 48, lookZ: 13, lookDx: 0 };
     // Portrait phones: a vertical-fov lens collapses the horizontal view to
     // ~27° and the gate tower swallows the whole frame. Anchor the compact
     // lens to ~55° HORIZONTAL and let the vertical angle follow the aspect
@@ -1130,7 +1093,7 @@ export class Game {
     if (attackers > 0) {
       if (!this.hintedWall && this.day <= 2) {
         this.hintedWall = true;
-        this.hud.showWave('성문이 잡힌다 — 몸에 붙은 원귀부터 갈아라');
+        this.hud.showWave('보루가 잡힌다 — 몸에 붙은 원귀부터 갈아라');
       }
       const effective = Math.min(MAX_CLAW_ATTACKERS, attackers);
       this.bunkerHp -= effective * CLAW_DPS * delta;
@@ -1429,12 +1392,9 @@ export class Game {
           if (this.mode !== 'playing') this.beginRun();
           this.waveActive = true;
           this.day = 4;
-          const dist = this.fortress
-            ? [this.fortress.radiusAt(Math.PI / 2 - this.gateBearing()) + 8,
-               this.fortress.radiusAt(Math.PI / 2 - this.gateBearing()) + 24] as const
-            : undefined;
-          this.horde.spawnWave(150, this.gateBearing() - 0.4, 4, 0.2, 0.55, { brute: 2, bloater: 6, shield: 8, runner: 10 }, dist);
-          this.horde.spawnWave(160, this.gateBearing() + 0.4, 4, 0.2, 0.75, undefined, dist);
+          const dist = [25, 47] as const;
+          this.horde.spawnWave(150, this.rng() * Math.PI * 2, 4, 0.2, 0.55, { brute: 2, bloater: 6, shield: 8, runner: 10 }, dist);
+          this.horde.spawnWave(160, this.rng() * Math.PI * 2, 4, 0.2, 0.75, undefined, dist);
         } else if (name === 'bloodnight') {
           this.hideEndScreen();
           if (this.mode !== 'playing') this.beginRun();
@@ -1457,7 +1417,7 @@ export class Game {
           this.startWave(4);
           this.waveActive = false;
           this.waveSpawnQueue = 0;
-          this.horde.spawnLineup(['normal', 'runner', 'shield', 'bloater', 'brute'], this.bunkerX, this.bunkerZ + 14, 2.4, Math.PI);
+          this.horde.spawnLineup(['normal', 'runner', 'shield', 'bloater', 'brute'], this.bunkerX, this.bunkerZ + 10, 2.4, Math.PI);
           // Pose freeze: no marching, no bloater suicides — anatomy shots only.
           this.horde.freezeAll();
         } else if (name === 'dead') {
