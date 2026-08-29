@@ -260,15 +260,17 @@ export class World {
     this.disposeYardHouses();
     const site = this.village?.plan.site;
     if (!site) return;
-    // A village street: pairs flank the lane (|dx| ≥ 12 keeps the zombie
-    // river flowing BETWEEN them into the gun), 13-27m out — measured to
-    // stay on the flat courtyard short of the 배산 cliff base, sized to
-    // read through the telephoto rig. Giwa/choga mixed both sides.
+    // A village street that FRAMES the fight, never hides it: the action
+    // band is the spawn ring 14-27m north of the gun, so the houses stand
+    // OUTSIDE it — near pair ±15m, far pair ±19m — leaving the central lane
+    // ±10m fully open (the camera's ±12° core view reaches the houses at
+    // 13-19°, street-edge framing like a 마을 골목, occluding nothing the
+    // gun needs to see).
     const specs = [
-      { style: 'giwa' as const, dx: -13, dz: -13, rot: 0.5 },
-      { style: 'choga' as const, dx: 12, dz: -16, rot: -0.7 },
-      { style: 'choga' as const, dx: -14, dz: -24, rot: 2.8 },
-      { style: 'giwa' as const, dx: 13, dz: -27, rot: -2.4 },
+      { style: 'giwa' as const, dx: -15, dz: -13, rot: 0.5 },
+      { style: 'choga' as const, dx: 15, dz: -15, rot: -0.7 },
+      { style: 'choga' as const, dx: -19, dz: -24, rot: 2.8 },
+      { style: 'giwa' as const, dx: 19, dz: -26, rot: -2.4 },
     ];
     // Shared palettes per style: same-material houses merge into the same
     // draw buckets and the whole street costs ~2× the one-house material
