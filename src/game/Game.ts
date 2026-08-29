@@ -730,14 +730,16 @@ export class Game {
     const dollyBack = (1 - this.dollyEase) * (1 - this.dollyEase) * 5;
 
     const cam = this.world.camera;
-    // Rampart defense, cinematographer-tuned (outsource agy vision round,
-    // 2026-08-29): over-the-shoulder from the EAST wall shoulder — the gate
-    // drops to the lower-left third, the horde road cuts a diagonal to the
-    // upper-right, eaves foreground the frame. dx = camera offset east of
-    // the gun; lookDx biases the gate axis into the golden intersection.
+    // Rampart defense — FUNCTIONAL framing (post-live-feedback retune,
+    // 2026-08-30): the previous cinematographer angle (high, east-shoulder,
+    // 27m up) won beauty scores but the gatling left the frame and the
+    // approach direction stopped reading. The camera now hovers just over
+    // the gunner's shoulder ON the wall axis: gatling bottom-center, the
+    // gate road running up-frame, the horde visibly pouring TOWARD the
+    // player. Vision-judged grid: D-axis 8/10 (gun visible, direction reads).
     const qv = this.compact
-      ? { dx: 4.5, height: 34, back: 23, lookZ: 10, lookDx: -2.5 }
-      : { dx: 6.5, height: 27, back: 28, fov: 54, lookZ: 22, lookDx: -3.5 };
+      ? { dx: 0.5, height: 6, back: 9, lookZ: 12, lookDx: 0 }
+      : { dx: 0.5, height: 5, back: 10, fov: 49, lookZ: 15, lookDx: 0 };
     // Portrait phones: a vertical-fov lens collapses the horizontal view to
     // ~27° and the gate tower swallows the whole frame. Anchor the compact
     // lens to ~55° HORIZONTAL and let the vertical angle follow the aspect
