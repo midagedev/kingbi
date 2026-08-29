@@ -162,3 +162,10 @@ declare module '@cheoma/api/environment.js' {
   export const SEASON_IDS: readonly string[];
   export const WEATHER_IDS: readonly string[];
 }
+
+declare module '@cheoma/api/building.js' {
+  import type * as THREE from 'three';
+  export const PRESETS: Record<string, Record<string, unknown> & { style?: string }>;
+  export function buildBuilding(params: Record<string, unknown>): THREE.Group;
+  export function disposeBuilding(root: THREE.Object3D): void;
+}

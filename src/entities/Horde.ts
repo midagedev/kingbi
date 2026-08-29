@@ -505,7 +505,9 @@ export class Horde {
   /** A wave pours in from the forest ring at `angle`.
    *  `approach01` 1 = forest edge (gameplay), 0 = ~3m close press (capture hooks).
    *  `distRange` overrides both with absolute radii — the city-wall layout
-   *  spawns just beyond the ring instead of scaling with villageRadius. */
+   *  spawns just beyond the ring instead of scaling with villageRadius.
+   *  `origin` recentres the spawn ring on the defense point (the yard is
+   *  far from the village origin in the palace-mountain layout). */
   spawnWave(
     count: number,
     angle: number,
@@ -514,6 +516,7 @@ export class Horde {
     approach01 = 1,
     mix?: Partial<WaveMix>,
     distRange?: readonly [number, number],
+    origin?: { x: number; z: number },
   ): void {
     if (mix) this.setWaveMix(mix);
     const fallback = 3 + (this.queries.villageRadius() * 0.94 - 3) * Math.max(0, Math.min(1, approach01));
@@ -526,8 +529,8 @@ export class Horde {
       const dist = radiusMin + this.rng() * radiusSpan;
       const a = angle + spread;
       const type = this.pickType();
-      zombie.x = Math.cos(a) * dist;
-      zombie.z = Math.sin(a) * dist;
+      zombie.x = (origin?.x ?? 0) + Math.cos(a) * dist;
+      zombie.z = (origin?.z ?? 0) + Math.sin(a) * dist;
       zombie.yaw = a + Math.PI;
       zombie.active = true;
       zombie.state = 'chase';

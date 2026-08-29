@@ -45,6 +45,8 @@ interface ThreeGameTestHooks {
   hideDebugUi(hidden: boolean): void;
   /** Live zombie positions for bot diagnostics: type, state, x/z. */
   listZombies(): Array<{ type: string; state: string; x: number; z: number }>;
+  /** Trigger a bloater-style blast at a world point (destruction QA). */
+  boomAt(x: number, z: number): void;
   /** Fire a style-layer stamp (capture timing). */
   showcaseStamp(char: string, sub: string): void;
   /** Park the camera manually (model-inspection captures; pair with pause). */

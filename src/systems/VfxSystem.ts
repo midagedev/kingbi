@@ -108,6 +108,25 @@ export class VfxSystem {
     }
   }
 
+  /** Demolition dust: slow pale puffs that hang over the rubble (the
+   *  ink grade renders them as paper-toned smoke). */
+  demolitionDust(x: number, y: number, z: number, count: number, rng: () => number): void {
+    for (let i = 0; i < count; i += 1) {
+      const spark = this.sparkPool.find((candidate) => candidate.life <= 0);
+      if (!spark) return;
+      spark.x = x + (rng() - 0.5) * 5;
+      spark.y = y + rng() * 2.4;
+      spark.z = z + (rng() - 0.5) * 5;
+      spark.vx = (rng() - 0.5) * 1.6;
+      spark.vz = (rng() - 0.5) * 1.6;
+      spark.vy = 0.7 + rng() * 1.1;
+      spark.maxLife = 1.3 + rng() * 0.9;
+      spark.life = spark.maxLife;
+      spark.size = 0.55 + rng() * 0.75;
+      spark.color.setHex(0x9a9186);
+    }
+  }
+
   /** Bright fast flash on every bullet impact — the hit marker. */
   hitSpark(x: number, y: number, z: number, dirX: number, dirZ: number, rng: () => number): void {
     for (let i = 0; i < 4; i += 1) {

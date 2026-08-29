@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { createVillageAsync } from '@cheoma/api/village.js';
+import { buildBuilding, disposeBuilding, PRESETS } from '@cheoma/api/building.js';
 import {
   setupEnvironment,
   setupPost,
@@ -70,6 +71,8 @@ export class World {
   private noirPass: NoirGradePass | null = null;
   private atmosphere: Atmosphere | null = null;
   private obstacleBoxes: THREE.Box3[] = [];
+  /** The four destructible yard houses (separate groups, never merged). */
+  private houses: Array<{ group: THREE.Group; box: THREE.Box3 }> = [];
   private readonly rand = createSeededRandom(20260815);
   private disposed = false;
 
@@ -155,11 +158,17 @@ export class World {
     const village = await createVillageAsync(
       {
         seed,
-        siteR: 213,
+        // Capital tier (R>=260) is what actually spawns the palace. No
+        // city wall, no temple, no village houses — the palace, the mountain
+        // and four destructible yard houses carry the whole stage.
+        siteR: 270,
         stream: true,
         river: false,
-        cityWall: true,
+        cityWall: false,
         sijeon: false,
+        houses: 0,
+        includeTemple: false,
+        includePalace: true,
         char01: 0.5,
       },
       { onStep: onProgress, signal },
@@ -175,6 +184,35 @@ export class World {
     this.obstacleBoxes = [];
     for (const proxy of village.getPickProxies()) {
       if (proxy.bbox) this.obstacleBoxes.push(proxy.bbox.clone());
+    }
+
+    // The four yard houses — the only buildings besides the palace, each a
+    // SEPARATE group (never merged) so demolition can hide it outright.
+    for (const house of this.houses) disposeBuilding(house.group);
+    this.houses = [];
+    const site = village.plan.site;
+    const palace = village.plan.features?.palace as { x: number; z: number } | undefined;
+    if (palace) {
+      const specs = [
+        { style: 'choga', dx: -17, dz: -12, rot: 0.6 },
+        { style: 'giwa', dx: 18, dz: -16, rot: -2.2 },
+        { style: 'giwa', dx: -21, dz: -33, rot: 2.6 },
+        { style: 'choga', dx: 15, dz: -37, rot: -0.8 },
+      ] as const;
+      // North yard (mountain side) around the defense point.
+      const yardX = palace.x;
+      const yardZ = palace.z - 78;
+      for (const spec of specs) {
+        const group = buildBuilding({ ...PRESETS[spec.style], seed: (seed ^ (0x9e37 + spec.dx)) >>> 0 });
+        const x = yardX + spec.dx;
+        const z = yardZ + spec.dz;
+        group.position.set(x, Number(site.heightAt?.(x, z) ?? 0), z);
+        group.rotation.y = spec.rot;
+        this.scene.add(group);
+        const box = new THREE.Box3().setFromObject(group);
+        this.houses.push({ group, box });
+        this.obstacleBoxes.push(box.clone());
+      }
     }
 
     // Filmic density: embers, ash, mist and the moon (rebuilt per village
@@ -300,6 +338,13 @@ export class World {
       const dx = c.x - x;
       const dz = c.z - z;
       if (dx * dx + dz * dz <= rSq) proxy.mesh.visible = false;
+    }
+    // Yard houses are ours alone — always safe to hide.
+    for (const house of this.houses) {
+      const c = house.box.getCenter(new THREE.Vector3());
+      const dx = c.x - x;
+      const dz = c.z - z;
+      if (dx * dx + dz * dz <= rSq) house.group.visible = false;
     }
   }
 

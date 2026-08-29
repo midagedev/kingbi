@@ -233,9 +233,12 @@ export class Game {
     this.horde.setFortress(null);
     const palace = queries.palaceCenter();
 
-    // The front yard, south of the hall — open ground, palace at our back.
+    // The BACK yard, north of the whole palace compound — the mountain
+    // (배산) looms behind the wall and the horde pours DOWN its slope
+    // toward the gun. Camera stands south over the palace roofs looking
+    // north: roof foreground, gun mid-frame, mountain river.
     this.bunkerX = palace ? palace.x : 0;
-    this.bunkerZ = palace ? palace.z + 30 : 0;
+    this.bunkerZ = palace ? palace.z - 78 : -60;
     this.bunkerGroundY = queries.heightAt(this.bunkerX, this.bunkerZ);
     this.gunX = this.bunkerX;
     this.gunZ = this.bunkerZ;
@@ -259,7 +262,7 @@ export class Game {
     for (let i = 0; i < 11; i += 1) {
       // North half only — the south lane stays clear so the horde river
       // reads against open ground (vision round feedback).
-      const a = Math.PI + ((i + 0.5) / 11) * Math.PI + 0.35;
+      const a = ((i + 0.5) / 11) * Math.PI + 0.35;
       const radius = 13 + (i % 3) * 3.2;
       const tx = this.bunkerX + Math.cos(a) * radius;
       const tz = this.bunkerZ + Math.sin(a) * radius;
@@ -353,7 +356,7 @@ export class Game {
     // The horde pours up the SOUTH axis into the yard — the telephoto rig
     // faces it dead-on. A narrow entry arc (±20°) keeps the river readable
     // instead of a 360° drip.
-    this.waveBearing = (this.rng() - 0.5) * 0.7;
+    this.waveBearing = -Math.PI / 2 + (this.rng() - 0.5) * 0.7;
     this.hud.showWave(tide
       ? `제${index}파 대격노 — 원귀의 강이 넘친다`
       : `제${index}파 — [${this.directionName(this.waveBearing)}] 능선이 무너져 내려온다`);
@@ -396,7 +399,7 @@ export class Game {
           const spreadBearing = this.waveBearing + (this.rng() - 0.5) * 0.6;
           // Convergence ring around the palace yard — inside the reserved
           // palace grounds, so no hanok stand in the horde's way.
-          this.horde.spawnWave(batch, spreadBearing, this.day, 0.1 + this.day * 0.015, 1.0, undefined, [25, 47]);
+          this.horde.spawnWave(batch, spreadBearing, this.day, 0.1 + this.day * 0.015, 1.0, undefined, [16, 34], { x: this.bunkerX, z: this.bunkerZ });
           this.waveSpawnQueue -= batch;
         }
       } else if (this.horde.activeCount === 0) {
@@ -690,10 +693,6 @@ export class Game {
     this.shakeTrauma = Math.max(0, this.shakeTrauma - delta * 1.7);
     const shake = this.shakeTrauma * this.shakeTrauma;
     const freq = this.shakeTime * 34;
-    // Idle drift: slow breathing so still frames feel handheld-filmic.
-    const driftX = Math.sin(this.elapsed * 0.21) * 0.4 + Math.sin(this.elapsed * 0.07) * 0.22;
-    const driftY = Math.sin(this.elapsed * 0.17 + 1.3) * 0.3;
-    const driftZ = Math.cos(this.elapsed * 0.13 + 0.6) * 0.3;
 
     // FOV punch: booms/brute kills snap the lens in, then ease out.
     this.fovPunch = Math.max(0, this.fovPunch - delta * 2.2);
@@ -709,8 +708,8 @@ export class Game {
     // aim with a deadzone — sweep the pointer to an edge to look around the
     // ring; recentre to settle. D = orbit radius, H = eye height.
     const qv = this.compact
-      ? { dist: 28, height: 21, lookAhead: 7, fov: 0, hFov: 42 }
-      : { dist: 32, height: 24, lookAhead: 8, fov: 32, hFov: 0 };
+      ? { dist: 28, height: 21, lookAhead: 10, fov: 0, hFov: 42 }
+      : { dist: 34, height: 30, lookAhead: 6, fov: 32, hFov: 0 };
     let baseFov = qv.fov ?? 40;
     if (this.compact) {
       const aspect = Math.max(0.55, Math.min(2.2, this.canvas.clientWidth / Math.max(1, this.canvas.clientHeight)));
@@ -723,27 +722,33 @@ export class Game {
       cam.updateProjectionMatrix();
     }
 
-    // Aim-follow pan: rotate the orbit toward the aim bearing, deadzoned so
-    // the rig never chases its own tail (aim is raycast THROUGH this camera).
+    // Bounded pan: the rig FACES THE RIVER (fixed south-west axis) and the
+    // pointer can nudge it ±20° — never free-spin. The old aim-follow loop
+    // fed itself (camera turns → aim ray sweeps → camera turns…) and idled
+    // in circles; the clamp breaks the loop by construction.
+    const baseYaw = Math.PI;
+    const panLimit = 0.35;
     let dyaw = this.camYawTarget - this.camYaw;
     dyaw = Math.atan2(Math.sin(dyaw), Math.cos(dyaw));
     const deadzone = 0.17; // ~10°: pointer near centre = no pan
     const beyond = Math.abs(dyaw) > deadzone ? dyaw - Math.sign(dyaw) * deadzone : 0;
     const pan = Math.max(-2.2 * delta, Math.min(2.2 * delta, beyond * Math.min(1, delta * 3.2)));
-    this.camYaw += pan;
+    this.camYaw = Math.max(baseYaw - panLimit, Math.min(baseYaw + panLimit, this.camYaw + pan));
 
     const dolly = qv.dist + dollyBack;
     const fwdX = Math.sin(this.camYaw);
     const fwdZ = Math.cos(this.camYaw);
+    // No positional drift while defending: a locked-off telephoto lens —
+    // shake still lands on impacts.
     cam.position.set(
-      this.gunX - fwdX * dolly + shake * 0.5 * pseudoNoise(freq, 1) + driftX,
-      this.gunGroundY + qv.height + shake * 0.35 * pseudoNoise(freq, 2) + driftY,
-      this.gunZ - fwdZ * dolly + driftZ,
+      this.gunX - fwdX * dolly + shake * 0.5 * pseudoNoise(freq, 1),
+      this.gunGroundY + qv.height + shake * 0.35 * pseudoNoise(freq, 2),
+      this.gunZ - fwdZ * dolly,
     );
     this.lookTarget.lerp(
       this.tmpV.set(
-        this.bunkerX + fwdX * qv.lookAhead + driftX * 0.6,
-        this.bunkerGroundY + 2.2,
+        this.bunkerX + fwdX * qv.lookAhead,
+        this.bunkerGroundY + 2.0,
         this.bunkerZ + fwdZ * qv.lookAhead,
       ),
       Math.min(1, delta * 4),
@@ -793,8 +798,8 @@ export class Game {
   /** Orbit yaw of the telephoto rig (-π/2 = looking west across the yard);
    *  pans with aim. The east-side stand-off keeps the camera OUT of the
    *  palace volume — shooting through it cost ~20fps of overdraw. */
-  private camYaw = -Math.PI / 2;
-  private camYawTarget = -Math.PI / 2;
+  private camYaw = Math.PI;
+  private camYawTarget = Math.PI;
   private cinemaBarsOn = false;
   // Final-blow kill cam: freeze, orbit the last launch, letterbox.
   private killCamTimer = 0;
@@ -1061,6 +1066,7 @@ export class Game {
       if (hits.length > 0) {
         this.world.clearObstaclesNear(x, z, 9);
         this.debris.chipBurst(x, y, z, 0, 0, 10, () => this.rng());
+        this.vfx.demolitionDust(x, y + 1, z, 14, () => this.rng());
       }
     }
     const dx = x - this.bunkerX;
@@ -1414,9 +1420,9 @@ export class Game {
           if (this.mode !== 'playing') this.beginRun();
           this.waveActive = true;
           this.day = 4;
-          const dist = [25, 47] as const;
-          this.horde.spawnWave(150, (this.rng() - 0.5) * 0.8, 4, 0.2, 0.55, { brute: 2, bloater: 6, shield: 8, runner: 10 }, dist);
-          this.horde.spawnWave(160, (this.rng() - 0.5) * 0.8, 4, 0.2, 0.75, undefined, dist);
+          const dist = [16, 34] as const;
+          this.horde.spawnWave(150, -Math.PI / 2 + (this.rng() - 0.5) * 0.8, 4, 0.2, 0.55, { brute: 2, bloater: 6, shield: 8, runner: 10 }, dist, { x: this.bunkerX, z: this.bunkerZ });
+          this.horde.spawnWave(160, -Math.PI / 2 + (this.rng() - 0.5) * 0.8, 4, 0.2, 0.75, undefined, dist, { x: this.bunkerX, z: this.bunkerZ });
         } else if (name === 'bloodnight') {
           this.hideEndScreen();
           if (this.mode !== 'playing') this.beginRun();
@@ -1439,7 +1445,7 @@ export class Game {
           this.startWave(4);
           this.waveActive = false;
           this.waveSpawnQueue = 0;
-          this.horde.spawnLineup(['normal', 'runner', 'shield', 'bloater', 'brute'], this.bunkerX, this.bunkerZ + 10, 2.4, Math.PI);
+          this.horde.spawnLineup(['normal', 'runner', 'shield', 'bloater', 'brute'], this.bunkerX, this.bunkerZ + 10, 2.4, 0);
           // Pose freeze: no marching, no bloater suicides — anatomy shots only.
           this.horde.freezeAll();
         } else if (name === 'dead') {
@@ -1470,6 +1476,9 @@ export class Game {
         this.world.camera.lookAt(tx, ty, tz);
         this.world.camera.fov = fov;
         this.world.camera.updateProjectionMatrix();
+      },
+      boomAt: (x: number, z: number) => {
+        this.onBloatBoom(x, z);
       },
       defenseRig: () => ({
         gunX: this.gunX,
