@@ -191,8 +191,9 @@ export class Game {
     document.querySelector('#mute-button')?.addEventListener('pointerdown', this.onMuteClick);
 
     // Grime fabric pass (grok image_gen output in public/textures).
+    // BASE_URL keeps it anchored under the deploy base (GitHub Pages).
     const textureLoader = new THREE.TextureLoader();
-    textureLoader.load('/textures/zombie-rag.jpg', (texture) => {
+    textureLoader.load(`${import.meta.env.BASE_URL}textures/zombie-rag.jpg`, (texture) => {
       this.horde.setBodyTexture(texture);
     });
 

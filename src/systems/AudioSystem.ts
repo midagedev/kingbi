@@ -444,7 +444,8 @@ export class AudioSystem {
     const ctx = this.context;
     if (!ctx || !this.master || this.bgm.size > 0) return;
     for (const name of ['title', 'wave', 'tide', 'bloodnight', 'lull', 'death-sting']) {
-      const element = new Audio(`/bgm/${name}.mp3`);
+      // BASE_URL anchors the tracks under the deploy base (GitHub Pages).
+      const element = new Audio(`${import.meta.env.BASE_URL}bgm/${name}.mp3`);
       element.loop = name !== 'death-sting';
       element.preload = 'auto';
       const gain = ctx.createGain();
