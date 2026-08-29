@@ -67,6 +67,12 @@ interface ThreeGameTestHooks {
   ): void;
   /** Defense anchors for capture rigs: gun emplacement + gate mouth. */
   defenseRig(): { gunX: number; gunY: number; gunZ: number; gateX: number; gateY: number; gateZ: number };
+  /** Terrain + staging probe (heights profile, houses, obstacles). */
+  stageDebug(): Record<string, unknown>;
+  /** Draw census by scene root — the "what eats the frame" probe. */
+  sceneCensus(): Array<{ root: string; meshes: number; visible: number; tris: number }>;
+  /** Rebuild the village with a specific seed (staging QA across seeds). */
+  reroll(seed: number): void;
 }
 
 interface Window {

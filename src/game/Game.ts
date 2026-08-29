@@ -245,16 +245,41 @@ export class Game {
     // (배산) looms behind the wall and the horde pours DOWN its slope
     // toward the gun. Camera stands south over the palace roofs looking
     // north: roof foreground, gun mid-frame, mountain river.
-    this.bunkerX = palace ? palace.x : 0;
-    this.bunkerZ = palace ? palace.z - 78 : -60;
+    // The gun stands in the palace's NORTH yard facing the 배산 — measured,
+    // never fixed. The old -78 offset landed the emplacement against an 80m
+    // cliff wall (the "산 중턱" frame) with the yard houses ON the rock face.
+    // Scan north to where the slope lifts, then keep a 38m flat runway in
+    // front of the gun: street, houses and spawn ring all on level ground,
+    // the mountain reading as a BACKDROP instead of a wall on the lens.
+    const h = queries.heightAt;
+    if (palace) {
+      const baseY = h(palace.x, palace.z - 40);
+      let cliffOff = 120;
+      for (let off = 45; off <= 120; off += 3) {
+        if (h(palace.x, palace.z - off) - baseY > 1.6) {
+          cliffOff = off;
+          break;
+        }
+      }
+      const yardOffset = Math.max(30, Math.min(78, cliffOff - 38));
+      this.bunkerX = palace.x;
+      this.bunkerZ = palace.z - yardOffset;
+    } else {
+      this.bunkerX = 0;
+      this.bunkerZ = -60;
+    }
     this.bunkerGroundY = queries.heightAt(this.bunkerX, this.bunkerZ);
     this.gunX = this.bunkerX;
     this.gunZ = this.bunkerZ;
     this.gunGroundY = this.bunkerGroundY;
 
-    // Keep the kill yard and its convergence ring clear of houses/props.
-    this.world.clearObstaclesNear(this.bunkerX, this.bunkerZ, 21);
-    this.world.clearObstaclesNear(this.bunkerX, this.bunkerZ + 26, 15);
+    // Keep the kill yard core and the palace-side approach clear; the four
+    // flanking houses (≥19m out) must survive the sweep.
+    this.world.clearObstaclesNear(this.bunkerX, this.bunkerZ, 15);
+    this.world.clearObstaclesNear(this.bunkerX, this.bunkerZ + 26, 12);
+    // The village street: two pairs flanking the firing lane, on the same
+    // measured courtyard (re-measured on every reroll).
+    this.world.placeYardHouses(this.bunkerX, this.bunkerZ, this.villageSeed);
 
     this.gunnerInstance?.dispose();
     this.gunnerInstance = new Gunner(this.world.scene, this.gunX, this.gunZ, this.gunGroundY);
@@ -409,7 +434,7 @@ export class Game {
           const spreadBearing = this.waveBearing + (this.rng() - 0.5) * 0.6;
           // Convergence ring around the palace yard — inside the reserved
           // palace grounds, so no hanok stand in the horde's way.
-          this.horde.spawnWave(batch, spreadBearing, this.day, 0.1 + this.day * 0.015, 1.0, undefined, [16, 34], { x: this.bunkerX, z: this.bunkerZ });
+          this.horde.spawnWave(batch, spreadBearing, this.day, 0.1 + this.day * 0.015, 1.0, undefined, [14, 27], { x: this.bunkerX, z: this.bunkerZ });
           this.waveSpawnQueue -= batch;
         }
       } else if (this.horde.activeCount === 0) {
@@ -1535,7 +1560,7 @@ export class Game {
           if (this.mode !== 'playing') this.beginRun();
           this.waveActive = true;
           this.day = 4;
-          const dist = [16, 34] as const;
+          const dist = [14, 27] as const;
           this.horde.spawnWave(150, -Math.PI / 2 + (this.rng() - 0.5) * 0.8, 4, 0.2, 0.55, { brute: 2, bloater: 6, shield: 8, runner: 10 }, dist, { x: this.bunkerX, z: this.bunkerZ });
           this.horde.spawnWave(160, -Math.PI / 2 + (this.rng() - 0.5) * 0.8, 4, 0.2, 0.75, undefined, dist, { x: this.bunkerX, z: this.bunkerZ });
         } else if (name === 'bloodnight') {
@@ -1655,6 +1680,44 @@ export class Game {
         gateY: this.bunkerGroundY,
         gateZ: this.bunkerZ,
       }),
+      /** Draw census by scene root — the "what eats the frame" probe. */
+      sceneCensus: () => this.world.sceneCensus(),
+      /** Terrain + staging probe: the north-height profile the defense
+       *  placement was measured against, plus house/obstacle layout. */
+      stageDebug: () => {
+        const q = this.world.queries();
+        const heights: Array<{ dz: number; y: number }> = [];
+        for (let dz = 24; dz >= -84; dz -= 6) {
+          heights.push({ dz, y: +q.heightAt(this.bunkerX, this.bunkerZ + dz).toFixed(2) });
+        }
+        return {
+          villageSeed: this.villageSeed,
+          palace: q.palaceCenter(),
+          bunker: {
+            x: +this.bunkerX.toFixed(1),
+            z: +this.bunkerZ.toFixed(1),
+            y: +this.bunkerGroundY.toFixed(2),
+          },
+          heights,
+          houses: this.world.yardHouses(),
+          obstaclesNearDefense: q.obstacleRects().filter((r) => {
+            const cx = (r.minX + r.maxX) / 2;
+            const cz = (r.minZ + r.maxZ) / 2;
+            return Math.abs(cx - this.bunkerX) < 50 && Math.abs(cz - this.bunkerZ) < 50;
+          }),
+        };
+      },
+      /** Rebuild the village with a specific seed (staging QA across seeds). */
+      reroll: (seed: number) => {
+        this.villageSeed = seed >>> 0;
+        void this.world.reroll(this.villageSeed, () => undefined).then(() => {
+          this.horde.setQueries(this.world.queries());
+          this.horde.clearAll();
+          this.establishBunker();
+          this.tracers.clear();
+          if (this.mode === 'title') this.titleCameraSnap();
+        });
+      },
     };
   }
 

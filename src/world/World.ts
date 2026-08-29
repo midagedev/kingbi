@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { createVillageAsync } from '@cheoma/api/village.js';
 import { buildBuilding, disposeBuilding, PRESETS } from '@cheoma/api/building.js';
 import {
@@ -53,6 +54,47 @@ export interface WorldQueries {
   palaceCenter(): { x: number; z: number } | null;
 }
 
+function bakeBuildingDraws(source: THREE.Group): THREE.Group {
+  source.updateMatrixWorld(true);
+  const buckets = new Map<THREE.Material, THREE.BufferGeometry[]>();
+  source.traverse((object) => {
+    const mesh = object as THREE.Mesh;
+    if (!mesh.isMesh || !mesh.geometry) return;
+    const material = mesh.material as THREE.Material | THREE.Material[];
+    if (Array.isArray(material)) return; // multi-material parts stay rare here
+    // mergeGeometries 제약: 균질 인덱싱(toNonIndexed) + 동일 속성 셋트.
+    const geo = mesh.geometry.index ? mesh.geometry.toNonIndexed() : mesh.geometry.clone();
+    for (const name of Object.keys(geo.attributes)) {
+      if (name !== 'position' && name !== 'normal' && name !== 'uv') geo.deleteAttribute(name);
+    }
+    if (!geo.getAttribute('normal')) geo.computeVertexNormals();
+    if (!geo.getAttribute('uv')) {
+      geo.setAttribute(
+        'uv',
+        new THREE.BufferAttribute(new Float32Array(geo.getAttribute('position').count * 2), 2),
+      );
+    }
+    geo.applyMatrix4(mesh.matrixWorld);
+    const list = buckets.get(material);
+    if (list) list.push(geo);
+    else buckets.set(material, [geo]);
+  });
+  const group = new THREE.Group();
+  group.name = 'building-baked';
+  for (const [material, list] of buckets) {
+    const merged = mergeGeometries(list, false);
+    for (const geo of list) geo.dispose();
+    if (!merged) continue;
+    const mesh = new THREE.Mesh(merged, material);
+    // 받는 그림자만: the noir night crushes cast shadows to ink anyway,
+    // and 180+ extra shadow-caster draws for four small houses is a bad
+    // trade on the yard's light budget.
+    mesh.receiveShadow = true;
+    group.add(mesh);
+  }
+  return group;
+}
+
 /**
  * Wire the game onto the cheoma procedural Joseon village generator:
  * one shared three instance, village terrain as the playfield, cheoma
@@ -71,8 +113,9 @@ export class World {
   private noirPass: NoirGradePass | null = null;
   private atmosphere: Atmosphere | null = null;
   private obstacleBoxes: THREE.Box3[] = [];
-  /** The four destructible yard houses (separate groups, never merged). */
-  private houses: Array<{ group: THREE.Group; box: THREE.Box3 }> = [];
+  /** The four destructible yard houses — baked to merged draws, one group
+   *  each so demolition can still hide them individually. */
+  private houses: Array<{ group: THREE.Group; box: THREE.Box3; source: THREE.Group }> = [];
   private readonly rand = createSeededRandom(20260815);
   private disposed = false;
 
@@ -186,39 +229,102 @@ export class World {
       if (proxy.bbox) this.obstacleBoxes.push(proxy.bbox.clone());
     }
 
-    // The four yard houses — the only buildings besides the palace, each a
-    // SEPARATE group (never merged) so demolition can hide it outright.
-    for (const house of this.houses) disposeBuilding(house.group);
-    this.houses = [];
-    const site = village.plan.site;
-    const palace = village.plan.features?.palace as { x: number; z: number } | undefined;
-    if (palace) {
-      const specs = [
-        { style: 'choga', dx: -17, dz: -12, rot: 0.6 },
-        { style: 'giwa', dx: 18, dz: -16, rot: -2.2 },
-        { style: 'giwa', dx: -21, dz: -33, rot: 2.6 },
-        { style: 'choga', dx: 15, dz: -37, rot: -0.8 },
-      ] as const;
-      // North yard (mountain side) around the defense point.
-      const yardX = palace.x;
-      const yardZ = palace.z - 78;
-      for (const spec of specs) {
-        const group = buildBuilding({ ...PRESETS[spec.style], seed: (seed ^ (0x9e37 + spec.dx)) >>> 0 });
-        const x = yardX + spec.dx;
-        const z = yardZ + spec.dz;
-        group.position.set(x, Number(site.heightAt?.(x, z) ?? 0), z);
-        group.rotation.y = spec.rot;
-        this.scene.add(group);
-        const box = new THREE.Box3().setFromObject(group);
-        this.houses.push({ group, box });
-        this.obstacleBoxes.push(box.clone());
-      }
-    }
-
-    // Filmic density: embers, ash, mist and the moon (rebuilt per village
-    // so mist sheets sit on the new terrain).
+    // The four yard houses are placed by Game.establishBunker AFTER it has
+    // measured where the flat courtyard actually ends (seed-dependent
+    // terrain) — see placeYardHouses().
+    this.disposeYardHouses();
     this.atmosphere?.dispose();
     this.atmosphere = new Atmosphere(this.scene, this.queries(), this.compact);
+  }
+
+  private disposeYardHouses(): void {
+    for (const house of this.houses) {
+      house.group.removeFromParent();
+      for (const child of house.group.children) {
+        (child as THREE.Mesh).geometry?.dispose();
+      }
+      disposeBuilding(house.source);
+    }
+    this.obstacleBoxes = this.obstacleBoxes.filter((box) =>
+      !this.houses.some((house) => house.box === box));
+    this.houses = [];
+  }
+
+  /** The destructible yard houses flanking the firing lane — placed
+   *  relative to the DEFENSE point (measured flat ground), never a fixed
+   *  palace offset: the old fixed -78 put the gun on the 배산 slope and hid
+   *  the houses behind the ridge on half the seeds. Each house's ~120
+   *  builder meshes are baked into one merged draw per material (they never
+   *  animate) — visible houses must not cost 500 draw calls. */
+  placeYardHouses(cx: number, cz: number, seed: number): void {
+    this.disposeYardHouses();
+    const site = this.village?.plan.site;
+    if (!site) return;
+    // A village street: pairs flank the lane (|dx| ≥ 12 keeps the zombie
+    // river flowing BETWEEN them into the gun), 13-27m out — measured to
+    // stay on the flat courtyard short of the 배산 cliff base, sized to
+    // read through the telephoto rig. Giwa/choga mixed both sides.
+    const specs = [
+      { style: 'giwa' as const, dx: -13, dz: -13, rot: 0.5 },
+      { style: 'choga' as const, dx: 12, dz: -16, rot: -0.7 },
+      { style: 'choga' as const, dx: -14, dz: -24, rot: 2.8 },
+      { style: 'giwa' as const, dx: 13, dz: -27, rot: -2.4 },
+    ];
+    // Shared palettes per style: same-material houses merge into the same
+    // draw buckets and the whole street costs ~2× the one-house material
+    // count instead of 4×.
+    const palettes = new Map<string, unknown>();
+    for (const spec of specs) {
+      const source = buildBuilding({
+        ...PRESETS[spec.style],
+        seed: (seed ^ (0x9e37 + spec.dx)) >>> 0,
+        ...(palettes.get(spec.style) ? { mats: palettes.get(spec.style) } : {}),
+      });
+      palettes.set(spec.style, (source as unknown as { userData: { materials?: unknown } }).userData.materials);
+      const x = cx + spec.dx;
+      const z = cz + spec.dz;
+      const group = bakeBuildingDraws(source);
+      group.position.set(x, Number(site.heightAt?.(x, z) ?? 0), z);
+      group.rotation.y = spec.rot;
+      this.scene.add(group);
+      const box = new THREE.Box3().setFromObject(group);
+      this.houses.push({ group, box, source });
+      this.obstacleBoxes.push(box.clone());
+    }
+  }
+
+  /** Stage probe: where the yard houses actually landed (QA/vision rigs). */
+  yardHouses(): Array<{ x: number; z: number; visible: boolean }> {
+    return this.houses.map((house) => ({
+      x: +house.group.position.x.toFixed(1),
+      z: +house.group.position.z.toFixed(1),
+      visible: house.group.visible,
+    }));
+  }
+
+  /** Draw census by top-level scene ancestor — the "what is eating the
+   *  frame" probe (QA only; walks the graph once on demand). */
+  sceneCensus(): Array<{ root: string; meshes: number; visible: number; tris: number }> {
+    const buckets = new Map<string, { meshes: number; visible: number; tris: number }>();
+    this.scene.traverse((object) => {
+      const mesh = object as THREE.Mesh;
+      if (!(mesh as THREE.Mesh).isMesh) return;
+      let root = object;
+      while (root.parent && root.parent !== this.scene) root = root.parent;
+      const key = root.name || '(anonymous)';
+      const geo = mesh.geometry as THREE.BufferGeometry | undefined;
+      const tris = geo?.attributes?.position
+        ? ((geo.attributes.position.count * (geo.index ? 1 : 1 / 3)) / (geo.index ? 3 : 1)) | 0
+        : 0;
+      const bucket = buckets.get(key) ?? { meshes: 0, visible: 0, tris: 0 };
+      bucket.meshes += 1;
+      if (mesh.visible) bucket.visible += 1;
+      bucket.tris += tris;
+      buckets.set(key, bucket);
+    });
+    return [...buckets.entries()]
+      .map(([root, b]) => ({ root, ...b }))
+      .sort((a, b) => b.tris - a.tris);
   }
 
   reroll(seed: number, onProgress: (label: string) => void): Promise<void> {
@@ -491,7 +597,24 @@ export class World {
     this.atmosphere?.update(delta);
     // Village LOD + water/critter animation follow the bunker as the view target.
     this.village?.update(delta);
-    this.village?.updateLod?.(this.camera, this.cameraFocusTarget, delta);
+    // 청크 LOD의 뷰어는 '전장'이다: the quarter-view camera hovers over the
+    // palace south of the gun, and a distance-based LOD keyed on the real
+    // camera loads the whole palace at FULL detail (+533 draws, 46fps).
+    // Feed updateLod a proxy anchored on the defense point — detail lands
+    // around the action; the render frustum still uses the real camera.
+    if (this.village?.updateLod) {
+      this.lodCamera ??= new THREE.PerspectiveCamera();
+      const proxy = this.lodCamera;
+      proxy.fov = this.camera.fov;
+      proxy.aspect = this.camera.aspect;
+      proxy.near = this.camera.near;
+      proxy.far = this.camera.far;
+      proxy.updateProjectionMatrix();
+      proxy.position.copy(this.cameraFocusTarget);
+      proxy.quaternion.copy(this.camera.quaternion);
+      proxy.updateMatrixWorld();
+      this.village.updateLod(proxy, this.cameraFocusTarget, delta);
+    }
     // cheoma's atmosphere crossfade writes its own exposure each fade tick
     // (night profile ships 1.24 for tourism readability); the horror grade
     // re-asserts itself every frame after the env has had its say.
@@ -515,6 +638,8 @@ export class World {
   }
 
   private readonly cameraFocusTarget = new THREE.Vector3();
+  /** LOD viewer proxy anchored on the defense point (see update()). */
+  private lodCamera: THREE.PerspectiveCamera | null = null;
 
   setFocusTarget(target: THREE.Vector3): void {
     this.cameraFocusTarget.copy(target);

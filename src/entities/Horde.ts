@@ -522,6 +522,7 @@ export class Horde {
     const fallback = 3 + (this.queries.villageRadius() * 0.94 - 3) * Math.max(0, Math.min(1, approach01));
     const radiusMin = distRange ? distRange[0] : fallback;
     const radiusSpan = distRange ? Math.max(0.01, distRange[1] - distRange[0]) : 0.14 * fallback;
+    const rects = this.queries.obstacleRects();
     for (let i = 0; i < count; i += 1) {
       const zombie = this.acquire();
       if (!zombie) return;
@@ -529,8 +530,27 @@ export class Horde {
       const dist = radiusMin + this.rng() * radiusSpan;
       const a = angle + spread;
       const type = this.pickType();
-      zombie.x = (origin?.x ?? 0) + Math.cos(a) * dist;
-      zombie.z = (origin?.z ?? 0) + Math.sin(a) * dist;
+      let zx = (origin?.x ?? 0) + Math.cos(a) * dist;
+      let zz = (origin?.z ?? 0) + Math.sin(a) * dist;
+      // Never materialize inside a flanking house — slide to the nearest
+      // edge so the street read stays clean (bodies walk AROUND buildings).
+      for (const rect of rects) {
+        const pad = 1.5;
+        if (zx > rect.minX - pad && zx < rect.maxX + pad && zz > rect.minZ - pad && zz < rect.maxZ + pad) {
+          const pushL = zx - (rect.minX - pad);
+          const pushR = rect.maxX + pad - zx;
+          const pushB = zz - (rect.minZ - pad);
+          const pushF = rect.maxZ + pad - zz;
+          const m = Math.min(pushL, pushR, pushB, pushF);
+          if (m === pushL) zx = rect.minX - pad;
+          else if (m === pushR) zx = rect.maxX + pad;
+          else if (m === pushB) zz = rect.minZ - pad;
+          else zz = rect.maxZ + pad;
+          break;
+        }
+      }
+      zombie.x = zx;
+      zombie.z = zz;
       zombie.yaw = a + Math.PI;
       zombie.active = true;
       zombie.state = 'chase';

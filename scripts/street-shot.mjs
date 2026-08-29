@@ -1,0 +1,14 @@
+import { chromium } from '@playwright/test';
+const browser = await chromium.launch({ channel: 'chromium' });
+const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
+page.on('pageerror', (e) => console.log('ERR', e.message.slice(0, 140)));
+await page.goto('http://127.0.0.1:5188/?godmode=1', { waitUntil: 'domcontentloaded' });
+await page.waitForFunction(() => !document.querySelector('#start-button')?.disabled, null, { timeout: 90_000 });
+await page.evaluate(() => window.__THREE_GAME_TEST_HOOKS__?.setState('active-play'));
+await page.waitForTimeout(15000);
+await page.screenshot({ path: 'shots/street-check.png' });
+await page.mouse.move(640, 400);
+await page.mouse.down();
+await page.waitForTimeout(2500);
+await page.screenshot({ path: 'shots/street-firing.png' });
+await browser.close();
