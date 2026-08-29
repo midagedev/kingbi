@@ -12,6 +12,9 @@ const CAPTURES = [
   { name: 'bloodnight-desktop', state: 'bloodnight', settle: 6000, holdFire: 2500 },
   { name: 'style-desktop', state: 'showcase', settle: 4500, holdFire: 1200, stamp: true },
   { name: 'tide-desktop', state: 'tide', settle: 8000, holdFire: 2000 },
+  { name: 'seal-desktop', state: 'seal', settle: 900 },
+  { name: 'armed-desktop', state: 'active-play', settle: 16000, armSeal: true },
+  { name: 'dawn-desktop', state: 'dawn', settle: 2500 },
   { name: 'dead-desktop', state: 'dead', settle: 1500 },
   { name: 'wave-mobile', state: 'active-play', settle: 12000, mobile: true },
   { name: 'stress-mobile', state: 'stress', settle: 6000, mobile: true, holdFire: 1500 },
@@ -42,6 +45,9 @@ async function main() {
 
     if (capture.state) {
       await page.evaluate((state) => window.__THREE_GAME_TEST_HOOKS__?.setState(state), capture.state);
+    }
+    if (capture.armSeal) {
+      await page.evaluate(() => window.__THREE_GAME_TEST_HOOKS__?.setSealCharge(1));
     }
     await page.waitForTimeout(Math.max(0, (capture.settle ?? 2000) - (capture.holdFire ?? 0)));
     if (capture.holdFire) {

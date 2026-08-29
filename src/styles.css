@@ -168,6 +168,46 @@ canvas {
   text-align: right;
 }
 
+/* ── 부적 봉인 gauge ──────────────────────────────────────────────── */
+#seal-cluster {
+  position: absolute;
+  left: 50%;
+  bottom: max(58px, calc(env(safe-area-inset-bottom) + 48px));
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: min(34vw, 250px);
+}
+#seal-bar {
+  flex: 1;
+  height: 8px;
+  border-radius: 0;
+  background: rgba(6, 5, 5, 0.82);
+  border: 1px solid var(--hairline);
+  overflow: hidden;
+}
+#seal-fill {
+  width: 100%;
+  height: 100%;
+  transform-origin: left center;
+  transform: scaleX(0);
+  background: linear-gradient(90deg, #4c101c, #c8102e, #ff4553);
+  transition: transform 0.18s ease;
+}
+#seal-state {
+  min-width: 64px;
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  color: var(--paper-dim);
+  text-align: right;
+  white-space: nowrap;
+}
+#seal-cluster.armed #seal-fill { animation: hp-pulse 0.45s infinite; }
+#seal-cluster.armed .vitals-label,
+#seal-cluster.armed #seal-state { color: #ffd2c2; text-shadow: 0 0 12px rgba(255, 69, 83, 0.8); }
+#seal-cluster.armed #seal-bar { border-color: rgba(255, 69, 83, 0.65); }
+
 /* ── Crosshair ───────────────────────────────────────────────────── */
 #wave-banner {
   position: absolute;
@@ -443,6 +483,7 @@ canvas {
   #hud-top { font-size: 11px; padding: 5px 10px 5px 9px; gap: 8px; }
   #bunker-cluster { min-width: 168px; font-size: 11px; bottom: max(220px, calc(env(safe-area-inset-bottom) + 208px)); }
   #heat-cluster { width: 52vw; bottom: max(210px, calc(env(safe-area-inset-bottom) + 198px)); }
+  #seal-cluster { width: 44vw; bottom: max(236px, calc(env(safe-area-inset-bottom) + 224px)); }
   #wave-banner { font-size: 13px; top: 16%; letter-spacing: 0.16em; }
   #combo-badge { font-size: 14px; top: 20%; }
 }

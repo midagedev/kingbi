@@ -16,6 +16,9 @@ const NoirGradeShader = {
     uAberration: { value: 0 },
     // Blood Night: the world itself turns red when the gate is failing.
     uBloodNight: { value: 0 },
+    // 새벽 장 — the dawn ceremony wash: gold paper, amber air. Animated in
+    // World toward setTimeOfDay's target so the break eases in and out.
+    uDawn: { value: 0 },
   },
   vertexShader: /* glsl */ `
     varying vec2 vUv;
@@ -30,6 +33,7 @@ const NoirGradeShader = {
     uniform vec2 uResolution;
     uniform float uAberration;
     uniform float uBloodNight;
+    uniform float uDawn;
     varying vec2 vUv;
 
     float hashNoise(vec2 p) {
@@ -89,16 +93,26 @@ const NoirGradeShader = {
       vec3 blood = vec3(g) * vec3(1.35, 0.22, 0.18) + vec3(0.05, 0.0, 0.0);
       mono = mix(mono, blood, clamp(uBloodNight, 0.0, 1.0) * 0.85);
 
+      // ── 새벽 장: first light on the same print — gold hanji, amber air.
+      // The woodblock survives; the paper warms AND lifts (night pixels
+      // get a sunlit floor, not a tint) so the break reads in one glance. ──
+      float gd = clamp(g * 1.18 + 0.15, 0.0, 1.0);
+      vec3 dawnTint = gd * vec3(1.08, 0.9, 0.66) + vec3(0.05, 0.02, 0.0);
+      mono = mix(mono, dawnTint, clamp(uDawn, 0.0, 1.0) * 0.94);
+
       // Kept neon is enriched — hotter than the source pixel, but the
       // violet channel survives so collars read magenta, blood stays red.
-      vec3 neon = col * vec3(1.35, 0.55, 1.0);
+      // At dawn the neon calms toward sunlight so it stays part of the
+      // same world instead of fighting the wash.
+      vec3 neon = col * mix(vec3(1.35, 0.55, 1.0), vec3(1.22, 0.95, 0.86), uDawn);
 
-      vec3 graded = mix(mono, neon, keep * 0.96);
+      vec3 graded = mix(mono, neon, keep * mix(0.96, 0.82, uDawn));
 
       // ── Vignette: the print's margin, brushed dark. ──
       vec2 q = (vUv - 0.5) * vec2(1.15, 1.0);
       float vig = 1.0 - smoothstep(0.42, 1.3, dot(q, q) * 2.6);
       vec3 vigColor = mix(vec3(0.42, 0.42, 0.42), vec3(0.55, 0.1, 0.1), clamp(uBloodNight, 0.0, 1.0));
+      vigColor = mix(vigColor, vec3(0.55, 0.44, 0.32), clamp(uDawn, 0.0, 1.0));
       graded *= mix(vigColor, vec3(1.0), vig);
 
       // ── Paper fiber grain: two crossed noises, salted heavier in the
@@ -120,6 +134,7 @@ export type NoirGradePass = ShaderPass & {
     uResolution: { value: [number, number] | { x: number; y: number } };
     uAberration: { value: number };
     uBloodNight: { value: number };
+    uDawn: { value: number };
   };
 };
 

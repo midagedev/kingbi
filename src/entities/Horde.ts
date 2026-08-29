@@ -772,6 +772,33 @@ export class Horde {
     return true;
   }
 
+  /** 부적 봉인 — the seal detonation purges every body inside the ring.
+   *  Door-plating is unmade with the flesh (armor-piercing), normal-tier
+   *  원귀 scatter, brutes take the burn and usually keep standing.
+   *  Bloater victims still queue their detonations — the chain reaction is
+   *  the point. Returns how many bodies the seal unmade. */
+  purgeRadius(
+    x: number,
+    z: number,
+    radius: number,
+    onKill: (position: THREE.Vector3, elite: boolean, dirX: number, dirZ: number, type: ZombieType) => void,
+  ): number {
+    let purged = 0;
+    for (let i = 0; i < this.zombies.length; i += 1) {
+      const zombie = this.zombies[i];
+      if (!zombie.active || zombie.state === 'dying' || zombie.state === 'dormant') continue;
+      const dx = zombie.x - x;
+      const dz = zombie.z - z;
+      const distSq = dx * dx + dz * dz;
+      if (distSq > radius * radius) continue;
+      const dist = Math.sqrt(distSq) || 1;
+      zombie.armor = 0;
+      const amount = zombie.type === 'brute' ? 40 : 999;
+      if (this.damage(i, dx / dist, dz / dist, 10, onKill, amount) === 'kill') purged += 1;
+    }
+    return purged;
+  }
+
   /** Outcome of one bullet landing. */
   damage(
     index: number,

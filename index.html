@@ -38,6 +38,12 @@
           <strong id="bunker-value">1000</strong>
         </div>
 
+        <div id="seal-cluster" aria-hidden="true">
+          <span class="vitals-label">부적</span>
+          <div id="seal-bar"><div id="seal-fill"></div></div>
+          <span id="seal-state">부적</span>
+        </div>
+
         <div id="heat-cluster">
           <div id="heat-bar"><div id="heat-fill"></div></div>
           <span id="heat-label">대기</span>
@@ -53,7 +59,8 @@
           <h1 class="title-word">궁가의 밤</h1>
           <p class="title-sub">
             궁궐 한가운데, 돌벙커 위의 개틀링.<br />
-            어둠 속에서 원귀의 강이 밀려온다. 새벽까지 갈아 없애라.
+            어둠 속에서 원귀의 강이 밀려온다. 새벽까지 갈아 없애라.<br />
+            <em>처치마다 부적에 먹이 들고 — 이 밤은 그림으로 남는다.</em>
           </p>
           <div class="title-actions">
             <button id="start-button" type="button" disabled>궁을 세우는 중…</button>
@@ -63,6 +70,7 @@
           <ul class="title-controls">
             <li><b>조준</b> 마우스 / 터치로 지점 찍기</li>
             <li><b>발사</b> 좌클릭 홀드 / 발사 버튼</li>
+            <li><b>봉인</b> 부적이 가득 차면 다음 발사가 부적 봉인</li>
             <li><b>주의</b> 과열 관리</li>
           </ul>
           <p id="title-loading" class="title-loading">궁을 세우는 중…</p>
@@ -88,6 +96,7 @@
           <div class="share-actions">
             <button id="share-button" type="button">전적 공유</button>
             <button id="shot-button" type="button">장면 저장</button>
+            <button id="paint-button" type="button">밤의 그림 저장</button>
           </div>
         </div>
       </section>

@@ -47,6 +47,12 @@ interface ThreeGameTestHooks {
   listZombies(): Array<{ type: string; state: string; x: number; z: number }>;
   /** Trigger a bloater-style blast at a world point (destruction QA). */
   boomAt(x: number, z: number): void;
+  /** Arm the talisman gauge (seal-shot QA): 0..1. */
+  setSealCharge(value: number): void;
+  /** Detonate the 부적 봉인 at a world point (sigil + purge QA). */
+  fireSealAt(x: number, z: number): void;
+  /** Compose the 밤의 그림 card as a PNG data URL (painting QA). */
+  paintingDataUrl(): string;
   /** Fire a style-layer stamp (capture timing). */
   showcaseStamp(char: string, sub: string): void;
   /** Park the camera manually (model-inspection captures; pair with pause). */

@@ -381,10 +381,29 @@ export class World {
     // pin it against later crossfade drift (title flyovers, wave banners).
     if (name === 'night') this.nightAtmosphere ??= this.captureAtmosphere();
     else this.nightAtmosphere = null;
+    // 새벽 장 — the dawn ceremony pins its own golden air (and warms the
+    // kingbi lights); the noir pass eases its wash via dawnMixTarget.
+    if (name === 'dawn') {
+      this.dawnAtmosphere ??= this.captureDawnAtmosphere();
+      this.applyDawnLighting();
+    } else {
+      this.dawnAtmosphere = null;
+    }
+    this.dawnMixTarget = name === 'dawn' ? 1 : 0;
     if (opts?.immediate) {
       this.renderer.toneMappingExposure = this.targetExposure;
+      if (this.noirPass) this.noirPass.uniforms.uDawn.value = this.dawnMixTarget;
     }
   }
+
+  private dawnAtmosphere: {
+    fogColor: THREE.Color;
+    fogNear: number;
+    fogFar: number;
+    background: THREE.Color;
+  } | null = null;
+  /** Noir pass dawn wash target — eases in/out with the ceremony. */
+  private dawnMixTarget = 0;
 
   private nightAtmosphere: {
     fogColor: THREE.Color;
@@ -412,6 +431,33 @@ export class World {
     }
   }
 
+  /** 새벽 장 lighting — low gold sun, warm bounce: the yard the painting
+   *  was worth. Called from setTimeOfDay('dawn'); night re-pins its own. */
+  private applyDawnLighting(): void {
+    this.sun.color.setHex(0xffd9a4);
+    this.sun.intensity = 1.35;
+    this.hemi.color.setHex(0xd8c39a);
+    this.hemi.groundColor.setHex(0x5a4a38);
+    this.hemi.intensity = 0.5;
+  }
+
+  private captureDawnAtmosphere(): {
+    fogColor: THREE.Color;
+    fogNear: number;
+    fogFar: number;
+    background: THREE.Color;
+  } | null {
+    if (!(this.scene.fog instanceof THREE.Fog)) return null;
+    // First light: warm haze the horde river dissolves into — the ceremoney
+    // air. Gold enough to read instantly against the permanent-night ink.
+    return {
+      fogColor: new THREE.Color(0x9a8562),
+      fogNear: 40,
+      fogFar: 260,
+      background: new THREE.Color(0xc9b389),
+    };
+  }
+
   private captureAtmosphere(): {
     fogColor: THREE.Color;
     fogNear: number;
@@ -436,7 +482,12 @@ export class World {
   update(delta: number): void {
     this.env?.update?.(delta);
     this.post?.update?.(delta);
-    if (this.noirPass) updateNoirGradePass(this.noirPass, delta);
+    if (this.noirPass) {
+      updateNoirGradePass(this.noirPass, delta);
+      // 새벽 장 wash eases toward the phase target (~0.9s ramp either way).
+      const dawn = this.noirPass.uniforms.uDawn;
+      dawn.value += (this.dawnMixTarget - dawn.value) * Math.min(1, delta * 1.1);
+    }
     this.atmosphere?.update(delta);
     // Village LOD + water/critter animation follow the bunker as the view target.
     this.village?.update(delta);
@@ -454,6 +505,12 @@ export class World {
       this.scene.fog.far = this.nightAtmosphere.fogFar;
       this.scene.background = this.nightAtmosphere.background;
       this.applyNightLighting();
+    } else if (this.dawnAtmosphere && this.scene.fog instanceof THREE.Fog) {
+      this.scene.fog.color.copy(this.dawnAtmosphere.fogColor);
+      this.scene.fog.near = this.dawnAtmosphere.fogNear;
+      this.scene.fog.far = this.dawnAtmosphere.fogFar;
+      this.scene.background = this.dawnAtmosphere.background;
+      this.applyDawnLighting();
     }
   }
 
@@ -500,6 +557,8 @@ export class World {
       noir: this.noirPass
         ? {
             enabled: this.noirPass.enabled !== false,
+            dawn: this.noirPass.uniforms.uDawn?.value ?? null,
+            bloodNight: this.noirPass.uniforms.uBloodNight?.value ?? null,
             resolution: this.noirPass.uniforms.uResolution?.value
               ? Array.from(this.noirPass.uniforms.uResolution.value as ArrayLike<number>)
               : null,

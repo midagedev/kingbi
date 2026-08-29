@@ -20,6 +20,9 @@ export class Hud {
   private readonly bunkerValue = this.getElement('#bunker-value');
   private readonly heatFill = this.getElement('#heat-fill');
   private readonly heatLabel = this.getElement('#heat-label');
+  private readonly sealCluster = this.getElement('#seal-cluster');
+  private readonly sealFill = this.getElement('#seal-fill');
+  private readonly sealState = this.getElement('#seal-state');
   private readonly vignette = this.getElement('#damage-vignette');
   private readonly waveBanner = this.getElement('#wave-banner');
   private readonly comboBadge = this.getElement('#combo-badge');
@@ -88,6 +91,15 @@ export class Hud {
     this.heatFill.style.transform = `scaleX(${Math.min(1, heat01).toFixed(3)})`;
     this.heatFill.classList.toggle('hot', heat01 > 0.75);
     this.heatLabel.textContent = venting ? '냉각 중…' : spin01 > 0.15 ? '격발' : '대기';
+  }
+
+  /** 부적 봉인 gauge — kills ink the talisman; at full it burns and the
+   *  next trigger stroke becomes the seal round. */
+  setSeal(charge01: number): void {
+    const armed = charge01 >= 1;
+    this.sealFill.style.transform = `scaleX(${Math.min(1, charge01).toFixed(3)})`;
+    this.sealCluster.classList.toggle('armed', armed);
+    this.sealState.textContent = armed ? '봉인 준비' : '부적';
   }
 
   showWave(text: string): void {

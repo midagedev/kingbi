@@ -59,6 +59,9 @@ export class BloodYard {
       polygonOffset: true,
       polygonOffsetFactor: -2,
       polygonOffsetUnits: -2,
+      // The yard canvas IS the night's painting — keep its ink red raw so
+      // the noir grade preserves it like the neon tracers, not crushed black.
+      toneMapped: false,
     });
     this.mesh = new THREE.Mesh(geometry, material);
     this.mesh.position.set(cx, 0, cz);
@@ -66,6 +69,76 @@ export class BloodYard {
     this.mesh.frustumCulled = false;
     this.mesh.name = 'blood-yard';
     scene.add(this.mesh);
+  }
+
+  /** The raw sheet — the night's painting, exported with the score card. */
+  get paintingCanvas(): HTMLCanvasElement {
+    return this.canvas;
+  }
+
+  /** 부적 낙관 — a burning red talisman glyph stamped into the yard,
+   *  permanent like the blood: every seal blast leaves a mark that survives
+   *  to the dawn card. Drawn by hand (two imperfect brush rings, spell
+   *  ticks, a star) so it reads as calligraphy, not clip-art. */
+  paintSigil(x: number, z: number, radius: number, rng: () => number): void {
+    if (x < this.minX || x > this.maxX || z < this.minZ || z > this.maxZ) return;
+    const size = this.canvas.width;
+    const px = ((x - this.minX) / (this.maxX - this.minX)) * size;
+    const py = ((z - this.minZ) / (this.maxZ - this.minZ)) * size;
+    const r = Math.max(10, (radius / (this.maxX - this.minX)) * size);
+    const ctx = this.ctx;
+    ctx.save();
+    ctx.translate(px, py);
+    ctx.rotate((rng() - 0.5) * 0.3);
+    // Brush ring: two overlapping passes with a wobble, ink-block style.
+    ctx.strokeStyle = 'rgba(232, 44, 60, 0.95)';
+    for (const [width, wobble] of [[r * 0.1, 0.05], [r * 0.055, -0.03]] as const) {
+      ctx.lineWidth = width;
+      ctx.beginPath();
+      for (let i = 0; i <= 40; i += 1) {
+        const a = (i / 40) * Math.PI * 2;
+        const rr = r * (0.86 + wobble * Math.sin(a * 5 + rng() * 0.6));
+        const ox = Math.cos(a) * rr;
+        const oy = Math.sin(a) * rr;
+        if (i === 0) ctx.moveTo(ox, oy);
+        else ctx.lineTo(ox, oy);
+      }
+      ctx.closePath();
+      ctx.stroke();
+    }
+    // Inner ring — the seal's field.
+    ctx.lineWidth = r * 0.035;
+    ctx.strokeStyle = 'rgba(226, 36, 52, 0.85)';
+    ctx.beginPath();
+    ctx.arc(0, 0, r * 0.6, 0, Math.PI * 2);
+    ctx.stroke();
+    // 신장 주문 — vertical spell strokes down the middle.
+    ctx.fillStyle = 'rgba(206, 22, 42, 0.9)';
+    for (let i = 0; i < 4; i += 1) {
+      const ly = -r * 0.45 + (i * r) / 4.4;
+      const lw = r * (0.05 + (i % 2) * 0.03);
+      ctx.fillRect(-lw / 2, ly, lw, r * 0.14 + (i % 2) * r * 0.05);
+    }
+    // 북두성 — the seven-star ward at the heart of the seal.
+    ctx.fillStyle = 'rgba(255, 64, 78, 0.95)';
+    ctx.beginPath();
+    for (let i = 0; i < 7; i += 1) {
+      const a = -Math.PI / 2 + (i / 7) * Math.PI * 2;
+      const sr = i === 3 ? r * 0.2 : r * 0.07;
+      ctx.arc(Math.cos(a) * r * 0.28, Math.sin(a) * r * 0.28, sr, 0, Math.PI * 2);
+    }
+    ctx.fill();
+    // Corner ticks — the talisman's anchor points.
+    ctx.lineWidth = r * 0.04;
+    ctx.strokeStyle = 'rgba(226, 36, 52, 0.9)';
+    for (const [cx, cy] of [[1, 1], [1, -1], [-1, 1], [-1, -1]] as const) {
+      ctx.beginPath();
+      ctx.moveTo(cx * r * 0.95, cy * r * 0.72);
+      ctx.lineTo(cx * r * 0.72, cy * r * 0.95);
+      ctx.stroke();
+    }
+    ctx.restore();
+    this.dirty = true;
   }
 
   /** Paint a splat at world (x, z). radius in world meters. */

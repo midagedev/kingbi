@@ -13,7 +13,7 @@ import { Hud } from '../systems/Hud';
 import { VfxSystem } from '../systems/VfxSystem';
 import { createSeededRandom } from '../utils/random';
 import { DebugTools, type DebugTuning } from '../systems/DebugTools';
-import { shareRun, shareScoreCard, formatSurvival, type RunStats } from '../systems/ShareKit';
+import { shareRun, shareScoreCard, sharePainting, buildPaintingCard, formatSurvival, type RunStats } from '../systems/ShareKit';
 
 export type GameMode = 'title' | 'playing' | 'dead';
 
@@ -119,6 +119,14 @@ export class Game {
   private hintedWall = false;
   private deathTimer = -1;
   private toastTimer = 0;
+
+  // 부적 봉인 — every kill inks the talisman; full charge arms the next
+  // trigger stroke as the seal round (see fireSeal()).
+  private sealCharge = 0;
+  private sealing = false;
+  private sealAnnounced = false;
+  // 새벽 장 — every fifth wave cleared floods the grade gold for a breath.
+  private dawnTimer = 0;
 
   private frame = 0;
   private elapsed = 0;
@@ -382,6 +390,8 @@ export class Game {
 
   private updateWaves(delta: number): void {
     if (this.upgradeOpen) return;
+    // 새벽 장 — the dawn ceremony holds the wave clock while it plays.
+    if (this.dawnTimer > 0) return;
     // The upgrade card waits for the kill cam to finish its beat.
     if (this.pendingUpgrade && this.killCamTimer <= 0) {
       this.pendingUpgrade = false;
@@ -403,17 +413,23 @@ export class Game {
           this.waveSpawnQueue -= batch;
         }
       } else if (this.horde.activeCount === 0) {
-        // Wave cleared → lull. The final blow gets a directed beat: freeze
-        // the frame, swing the camera around the last launch, letterbox.
+        // Wave cleared. Every fifth (대격노 survived) breaks the NIGHT
+        // itself: dawn floods the grade, the yard's painting stands
+        // complete, then the next night closes in. Other waves take the
+        // directed kill-cam beat.
         this.waveActive = false;
-        this.lullTimer = LULL_SECONDS;
-        this.bunkerHp = Math.min(this.bunkerMax, this.bunkerHp + WAVE_REPAIR);
-        this.hud.showWave(`제${this.day}파 격퇴 — 보루 수리 +${WAVE_REPAIR}`);
-        this.audio.bell();
-        this.audio.setBgmState('lull');
         this.comboCount = 0;
         this.hud.setCombo(0);
-        this.startKillCam();
+        this.audio.bell();
+        this.audio.setBgmState('lull');
+        if (this.day > 0 && this.day % 5 === 0) {
+          this.beginDawn();
+        } else {
+          this.lullTimer = LULL_SECONDS;
+          this.bunkerHp = Math.min(this.bunkerMax, this.bunkerHp + WAVE_REPAIR);
+          this.hud.showWave(`제${this.day}파 격퇴 — 보루 수리 +${WAVE_REPAIR}`);
+          this.startKillCam();
+        }
         // First reward after the opening wave, then every other wave —
         // deferred until the kill cam releases the frame.
         if ((this.day === 1 || this.day % 2 === 0) && !this.godmode) this.pendingUpgrade = true;
@@ -422,6 +438,28 @@ export class Game {
       this.lullTimer -= delta;
       if (this.lullTimer <= 0) this.startWave(this.day + 1);
     }
+  }
+
+  /** 새벽 장 — the chapter break. Five waves is one night; surviving the
+   *  대격노 that closes it earns a breath of gold: remaining 원귀 freeze
+   *  into ash, the yard keeps its painting (blood pools + seal sigils),
+   *  the talisman drinks a free charge, and then night two falls. */
+  private beginDawn(): void {
+    this.dawnTimer = 9.5;
+    this.horde.freezeAll();
+    this.world.setTimeOfDay('dawn');
+    this.bunkerHp = Math.min(this.bunkerMax, this.bunkerHp + 400);
+    this.sealCharge = Math.min(1, this.sealCharge + 0.4);
+    this.hud.stamp('曉', `밤${this.nightNumber} 완성`);
+    this.hud.showWave(`새벽 — 밤${this.nightNumber}의 그림이 완성되었다`);
+    this.audio.roar();
+    this.audio.drum(0.6);
+    this.fovPunch = Math.min(1.4, this.fovPunch + 0.5);
+  }
+
+  /** Chapter count — five waves per night; the painting is titled by it. */
+  private get nightNumber(): number {
+    return Math.max(1, Math.ceil(this.day / 5));
   }
 
   // ── Dawn-era upgrades, gatling flavored ────────────────────────────────
@@ -578,6 +616,16 @@ export class Game {
 
     this.updateAim(delta);
     this.updateGatling(gameDelta);
+    // 새벽 장 clock: when the gold breath runs out, the next night falls.
+    if (this.dawnTimer > 0) {
+      this.dawnTimer -= gameDelta;
+      if (this.dawnTimer <= 0) {
+        this.world.setTimeOfDay('night');
+        this.lullTimer = 5;
+        this.hud.showWave('다시 밤이 내린다');
+        this.audio.setPhase('night');
+      }
+    }
     this.updateWaves(gameDelta);
     this.updateHorde(gameDelta);
     this.updateFx(gameDelta, animDelta);
@@ -616,6 +664,14 @@ export class Game {
     this.applyQuarterCamera(delta);
 
     this.hud.setHeat(this.heat, this.ventTimer > 0, this.spin);
+    this.hud.setSeal(this.sealCharge);
+    if (this.sealCharge >= 1 && !this.sealAnnounced) {
+      this.sealAnnounced = true;
+      this.hud.showWave('부적이 가득 찼다 — 다음 발사가 봉인이 된다');
+      this.audio.bell();
+    } else if (this.sealCharge < 1) {
+      this.sealAnnounced = false;
+    }
     this.hud.setWave(this.day, this.waveSpawnQueue + this.horde.activeCount);
     this.hud.update(delta);
     this.publishDiagnostics();
@@ -677,9 +733,16 @@ export class Game {
         queries.heightAt(this.aimPoint.x, this.aimPoint.z) + 0.2,
         this.aimPoint.z,
       );
-      const pulse = look.fireHeld ? 1 + Math.sin(this.elapsed * 18) * 0.12 : 1;
+      // 봉인 준비 — the ring goes paper-white and breathes: the armed
+      // talisman reads at a glance against the red idle reticle.
+      const armed = this.sealCharge >= 1;
+      const pulse = armed
+        ? 1.2 + Math.sin(this.elapsed * 9) * 0.08
+        : look.fireHeld ? 1 + Math.sin(this.elapsed * 18) * 0.12 : 1;
       this.aimRing.scale.setScalar(pulse);
-      (this.aimRing.material as THREE.MeshBasicMaterial).opacity = look.fireHeld ? 1 : 0.92;
+      const ringMat = this.aimRing.material as THREE.MeshBasicMaterial;
+      ringMat.color.setHex(armed ? 0xfff1e2 : 0xff2a1c);
+      ringMat.opacity = armed ? 1 : look.fireHeld ? 1 : 0.92;
     }
     void delta;
   }
@@ -865,6 +928,12 @@ export class Game {
     const gun = this.gunnerInstance;
     if (!gun) return;
 
+    // 봉인 준비됨 — the armed talisman claims the next trigger stroke.
+    if (this.sealCharge >= 1) {
+      this.fireSeal();
+      return;
+    }
+
     const muzzle = gun.muzzleWorld(new THREE.Vector3());
     // Fire toward the ground aim point (horizontal), from the turret muzzle.
     const aimX = this.aimPoint.x - muzzle.x;
@@ -948,6 +1017,37 @@ export class Game {
     this.tracers.spawnCasing(muzzle.x, muzzle.y, muzzle.z, rightX, rightZ, () => this.rng());
   }
 
+  /** 부적 봉인포 — the seal round. A full talisman claims the next trigger
+   *  stroke: a paper-white flash, every 원귀 inside the ring unmade (door
+   *  plating burns with the flesh), and a red sigil stamped into the yard
+   *  FOREVER — the mark survives to the dawn card as part of the painting.
+   *  Purge victims don't re-ink the talisman, so the seal can't chain itself. */
+  private fireSeal(): void {
+    const x = this.aimPoint.x;
+    const z = this.aimPoint.z;
+    const y = this.world.queries().heightAt(x, z) + 1.2;
+    this.sealCharge = 0;
+    this.sealing = true;
+    const purged = this.horde.purgeRadius(x, z, 9.5, (position, elite, dirX, dirZ, type) => {
+      this.onZombieKilled(position, elite, dirX, dirZ, type);
+    });
+    this.sealing = false;
+    this.bloodYard?.paintSigil(x, z, 9.5, () => this.rng());
+    // 정화 — pale souls lift out of the ring while the paper burns white.
+    this.vfx.frostShimmer(x, y, z, 26, () => this.rng());
+    this.vfx.demolitionDust(x, y, z, 10, () => this.rng());
+    this.audio.bell();
+    this.audio.boom();
+    this.hud.impactFlash();
+    this.hud.stamp('封', purged >= 14 ? `대봉인 — ${purged}체 정화` : `부적 봉인 — ${purged}체 정화`);
+    this.sealStampLock = 1.6;
+    this.shakeTrauma = Math.min(1, this.shakeTrauma + 0.6);
+    this.fovPunch = Math.min(1.4, this.fovPunch + 1.0);
+    this.world.impactAberration(2.2);
+    this.slowmoTimer = 0.5;
+    this.audio.drum(0.8);
+  }
+
   /** Kill-count drum beats — the shareable "how deep did you get" moments. */
   private static readonly KILL_MILESTONES: ReadonlyArray<{ at: number; text: string }> = [
     { at: 100, text: '백 귀토벌 — 첫 백을 갈았다' },
@@ -991,6 +1091,11 @@ export class Game {
     }
     this.hud.setScore(this.kills);
     this.checkKillMilestone();
+    // Kills ink the talisman (purge victims don't — no runaway seal loops).
+    if (!this.sealing) {
+      const gain = type === 'brute' ? 0.14 : type === 'bloater' ? 0.05 : type === 'shield' ? 0.03 : 0.022;
+      this.sealCharge = Math.min(1, this.sealCharge + gain * (elite ? 1.6 : 1));
+    }
     // The yard remembers every kill.
     this.lastKillX = position.x;
     this.lastKillZ = position.z;
@@ -1044,7 +1149,7 @@ export class Game {
     this.shakeTrauma = Math.min(1, this.shakeTrauma + 0.5);
     this.fovPunch = Math.min(1.4, this.fovPunch + 0.7);
     this.world.impactAberration(1.6);
-    if (this.boomStampCooldown <= 0) {
+    if (this.boomStampCooldown <= 0 && this.sealStampLock <= 0) {
       this.boomStampCooldown = 1.2;
       this.hud.stamp('爆', '유폭');
     }
@@ -1090,7 +1195,7 @@ export class Game {
       this.bunkerX,
       this.bunkerZ,
       false,
-      'night' as ZombiePhase,
+      (this.dawnTimer > 0 ? 'dawn' : 'night') as ZombiePhase,
       fear,
       {
         onKill: (position, elite, dirX, dirZ, type) => this.onZombieKilled(position, elite, dirX, dirZ, type),
@@ -1154,6 +1259,7 @@ export class Game {
     this.splatSfxTimer -= delta;
     this.clankSfxTimer -= delta;
     this.boomStampCooldown -= delta;
+    this.sealStampLock -= delta;
     if (this.comboTimer > 0) {
       this.comboTimer -= delta;
       if (this.comboTimer <= 0) {
@@ -1167,6 +1273,8 @@ export class Game {
   private splatSfxTimer = 0;
   private clankSfxTimer = 0;
   private boomStampCooldown = 0;
+  /** The seal's 封 stamp owns the frame — chained bloater 爆 stamps yield. */
+  private sealStampLock = 0;
 
   /** One controls reminder early in a newcomer's first couple of runs. */
   private updateHints(delta: number): void {
@@ -1240,6 +1348,8 @@ export class Game {
     this.pendingUpgrade = false;
     this.bloodNight = 0;
     this.bloodNightAnnounced = false;
+    this.sealCharge = 0;
+    this.dawnTimer = 0;
     this.world.setBloodNight(0);
     this.hud.setSpeedlines(false);
     const runs = Number(localStorage.getItem('tilldawn-siege-runs') || '0') + 1;
@@ -1296,6 +1406,7 @@ export class Game {
     const prevWave = Number(localStorage.getItem('tilldawn-siege-bestwave') || '0');
     const stats: RunStats = {
       wave: Math.max(1, this.day),
+      night: this.nightNumber,
       kills: this.kills,
       maxCombo: this.maxCombo,
       accuracy: this.shotsFired > 0 ? this.shotsHit / this.shotsFired : 0,
@@ -1306,7 +1417,7 @@ export class Game {
     if (this.day > prevWave) localStorage.setItem('tilldawn-siege-bestwave', String(this.day));
 
     this.getElement('#end-title').textContent = '보루가 함락되었다';
-    this.getElement('#end-subtitle').textContent = `제${stats.wave}파 · 격살 ${this.kills}`;
+    this.getElement('#end-subtitle').textContent = `밤${stats.night} · 제${stats.wave}파 · 격살 ${this.kills}`;
     this.getElement('#stat-kills').textContent = String(this.kills);
     this.getElement('#stat-combo').textContent = String(this.maxCombo);
     this.getElement('#stat-acc').textContent = `${Math.round(stats.accuracy * 100)}%`;
@@ -1326,6 +1437,7 @@ export class Game {
   private bindShareActions(stats: RunStats): void {
     const share = this.getElement('#share-button') as HTMLButtonElement;
     const shot = this.getElement('#shot-button') as HTMLButtonElement;
+    const paint = this.getElement('#paint-button') as HTMLButtonElement;
     const run = async (button: HTMLButtonElement, action: () => Promise<string>) => {
       button.disabled = true;
       try {
@@ -1343,6 +1455,9 @@ export class Game {
     };
     shot.onclick = () => {
       void run(shot, () => shareScoreCard(this.canvas, stats));
+    };
+    paint.onclick = () => {
+      void run(paint, () => sharePainting(this.bloodYard?.paintingCanvas ?? null, stats));
     };
   }
 
@@ -1432,6 +1547,41 @@ export class Game {
           this.hideEndScreen();
           if (this.mode !== 'playing') this.beginRun();
           this.startWave(5);
+        } else if (name === 'dawn') {
+          // 새벽 장 — the chapter-break ceremony over a painted yard: purge
+          // a cluster first so blood + sigil survive into the golden frame.
+          this.hideEndScreen();
+          if (this.mode !== 'playing') this.beginRun();
+          this.startWave(5);
+          this.waveActive = false;
+          this.waveSpawnQueue = 0;
+          this.horde.clearAll();
+          this.horde.spawnWave(
+            46, -Math.PI / 2, 4, 0.15, 0.5,
+            { brute: 1, bloater: 3, shield: 5, runner: 6 },
+            [7, 15], { x: this.bunkerX, z: this.bunkerZ },
+          );
+          this.aimPoint.set(this.bunkerX, this.bunkerGroundY, this.bunkerZ - 9);
+          this.fireSeal();
+          this.hintTimer = -1;
+          this.beginDawn();
+        } else if (name === 'seal') {
+          // 부적 봉인 — a packed ring purged by the seal round (QA hook).
+          // Aim lands in the OPEN yard south of the hanok row so the sigil
+          // is never occluded by a roof in captures.
+          this.hideEndScreen();
+          if (this.mode !== 'playing') this.beginRun();
+          this.startWave(4);
+          this.waveActive = false;
+          this.waveSpawnQueue = 0;
+          this.horde.clearAll();
+          this.horde.spawnWave(
+            46, -Math.PI / 2, 4, 0.15, 0.5,
+            { brute: 1, bloater: 3, shield: 5, runner: 6 },
+            [7, 15], { x: this.bunkerX, z: this.bunkerZ },
+          );
+          this.aimPoint.set(this.bunkerX, this.bunkerGroundY, this.bunkerZ - 9);
+          this.fireSeal();
         } else if (name === 'showcase') {
           this.hideEndScreen();
           if (this.mode !== 'playing') this.beginRun();
@@ -1480,6 +1630,23 @@ export class Game {
       boomAt: (x: number, z: number) => {
         this.onBloatBoom(x, z);
       },
+      setSealCharge: (value: number) => {
+        this.sealCharge = Math.max(0, Math.min(1, value));
+      },
+      fireSealAt: (x: number, z: number) => {
+        this.aimPoint.set(x, this.bunkerGroundY, z);
+        this.fireSeal();
+      },
+      /** Compose the 밤의 그림 card (painting QA) as a data URL. */
+      paintingDataUrl: () => buildPaintingCard(this.bloodYard?.paintingCanvas ?? null, {
+        wave: Math.max(1, this.day),
+        night: this.nightNumber,
+        kills: this.kills,
+        maxCombo: this.maxCombo,
+        accuracy: this.shotsFired > 0 ? this.shotsHit / this.shotsFired : 0,
+        survivedSeconds: this.elapsed,
+        isRecord: false,
+      }).toDataURL('image/png'),
       defenseRig: () => ({
         gunX: this.gunX,
         gunY: this.gunGroundY,
@@ -1503,6 +1670,9 @@ export class Game {
       heat: this.heat,
       spin: this.spin,
       kills: this.kills,
+      seal: this.sealCharge,
+      dawn: this.dawnTimer > 0,
+      night: this.nightNumber,
       zombies: this.horde.activeCount,
       zombiesByType: this.horde.typeCounts(),
       bgm: this.audio.bgmStateName,
