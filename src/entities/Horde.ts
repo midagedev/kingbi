@@ -848,20 +848,12 @@ export class Horde {
     // Brutes have super armor; they do not flinch.
     zombie.stagger = zombie.type === 'brute' ? 0 : zombie.elite ? 0.14 : 0.3;
     if (zombie.hp <= 0) {
-      zombie.state = 'dying';
-      zombie.stateTime = 0;
-      // Exaggeration physics: the body rides the shot — launched, tumbling,
-      // bouncing once when it splats down. Brutes are mass; they barely bow.
-      const launch = (13 + this.rng() * 9) * (zombie.type === 'brute' ? 0.5 : 1);
-      zombie.vx = dirX * launch;
-      zombie.vz = dirZ * launch;
-      zombie.vy = (7 + this.rng() * 6) * (zombie.type === 'brute' ? 0.55 : 1);
-      zombie.airY = 0.02;
-      zombie.tumble = this.rng() * Math.PI * 2;
-      zombie.tumbleRate = (this.rng() < 0.5 ? -1 : 1) * (7 + this.rng() * 9);
       // Bloaters detonate on death — the chain-reaction engine.
       if (zombie.type === 'bloater') this.booms.push({ x: zombie.x, z: zombie.z });
       onKill(this.tmpV.set(zombie.x, 0, zombie.z), zombie.elite, dirX, dirZ, zombie.type);
+      // The body leaves the horde NOW — Game turns it into a box3d corpse
+      // rigid body that rides the shot, tumbles and PILES on the rubble.
+      zombie.active = false;
       return 'kill';
     }
     return 'hit';

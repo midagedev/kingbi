@@ -4,6 +4,7 @@
 // (position + quaternion per slot) export through one flat buffer.
 #include "box3d/box3d.h"
 
+#include <math.h>
 #include <stdint.h>
 
 #define BX_MAX_BODIES 3072
@@ -49,11 +50,22 @@ int bx_alive_count( void )
 	return g_aliveCount;
 }
 
-// Returns the slot index or -1 when full. Linear velocity + angular
-// velocity seed the tumble; the cube spawns axis-aligned.
-int bx_add_cube( float x, float y, float z, float hx,
-				 float vx, float vy, float vz,
-				 float avx, float avy, float avz )
+// Awake (simulating) bodies — JS picks the substep budget from the load.
+int bx_awake_count( void )
+{
+	if ( b3World_IsValid( g_world ) == false )
+	{
+		return 0;
+	}
+	return b3World_GetAwakeBodyCount( g_world );
+}
+
+// Returns the slot index or -1 when full. Non-uniform box (rubble chunks
+// and corpse hulls share this), yaw so corpses don't all land axis-aligned,
+// linear + angular velocity seed the tumble.
+int bx_add_box( float x, float y, float z, float hx, float hy, float hz, float yaw,
+				float vx, float vy, float vz,
+				float avx, float avy, float avz )
 {
 	int slot = -1;
 	for ( int i = 0; i < BX_MAX_BODIES; ++i )
@@ -72,6 +84,8 @@ int bx_add_cube( float x, float y, float z, float hx,
 	b3BodyDef bodyDef = b3DefaultBodyDef();
 	bodyDef.type = b3_dynamicBody;
 	bodyDef.position = ( b3Pos ){ x, y, z };
+	const float halfYaw = 0.5f * yaw;
+	bodyDef.rotation = ( b3Quat ){ { 0.0f, sinf( halfYaw ), 0.0f }, cosf( halfYaw ) };
 	bodyDef.linearVelocity = ( b3Vec3 ){ vx, vy, vz };
 	bodyDef.angularVelocity = ( b3Vec3 ){ avx, avy, avz };
 	bodyDef.linearDamping = 0.08f;
@@ -79,7 +93,7 @@ int bx_add_cube( float x, float y, float z, float hx,
 	bodyDef.enableSleep = true;
 
 	b3BodyId body = b3CreateBody( g_world, &bodyDef );
-	b3BoxHull cube = b3MakeBoxHull( hx, hx, hx );
+	b3BoxHull cube = b3MakeBoxHull( hx, hy, hz );
 	b3ShapeDef shapeDef = b3DefaultShapeDef();
 	shapeDef.baseMaterial.friction = 0.8f;
 	shapeDef.baseMaterial.restitution = 0.22f;
@@ -114,7 +128,9 @@ void bx_step( float dt, int subSteps )
 }
 
 // Flat state export: 8 floats per OCCUPIED slot run, prefixed by count.
-// Layout: [count, (x y z qx qy qz qw slot) * count]
+// Layout: [count, (x y z qx qy qz qw slot+awake*0.5) * count]
+// The slot float carries the awake flag so JS can skip matrix writes for
+// sleeping piles — the bodies stay, the per-frame cost does not.
 float* bx_get_states( void )
 {
 	int w = 1;
@@ -134,7 +150,7 @@ float* bx_get_states( void )
 		g_states[w++] = q.v.y;
 		g_states[w++] = q.v.z;
 		g_states[w++] = q.s;
-		g_states[w++] = (float)i;
+		g_states[w++] = (float)i + ( b3Body_IsAwake( g_bodies[i] ) ? 0.5f : 0.0f );
 	}
 	return g_states;
 }

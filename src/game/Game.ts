@@ -211,8 +211,16 @@ export class Game {
 
     this.world.camera.rotation.order = 'YXZ';
     this.loop = new Loop(
-      (delta) => this.update(delta),
-      () => this.world.render(),
+      (delta) => {
+        const t0 = performance.now();
+        this.update(delta);
+        this.updateMs = this.updateMs * 0.9 + (performance.now() - t0) * 0.1;
+      },
+      () => {
+        const t0 = performance.now();
+        this.world.render();
+        this.renderMs = this.renderMs * 0.9 + (performance.now() - t0) * 0.1;
+      },
     );
 
     void this.bootstrap(onReady);
@@ -238,6 +246,7 @@ export class Game {
     this.rubble ??= new Box3dWorld(this.world.scene, 3072);
     const physicsOk = await this.rubble.init(-26, this.bunkerGroundY, 320);
     if (!physicsOk) console.warn('box3d wasm 미로딩 — 러블 비활성');
+    console.info(`[box3d] ready=${physicsOk} bodies=${this.rubble.bodyCount} cap=${this.rubble.capacity}`);
     onReady(true, 'ready');
   }
 
@@ -1093,7 +1102,7 @@ export class Game {
       endZ = houseHit.z;
       endY = muzzle.y + shotSlope * houseHit.dist;
       this.shotsHit += 1;
-      this.chewHouse(houseHit.index, endX, endY, endZ, dirX, dirZ, 1.15 + (this.splash ? 0.75 : 0));
+      this.chewHouse(houseHit.index, endX, endY, endZ, dirX, dirZ, 2.0 + (this.splash ? 1.5 : 0));
     } else {
       // Misses terminate inside the visible murk, not at the 160m logic cap,
       // so tracers read as short streaks instead of dying in fog.
@@ -1148,27 +1157,36 @@ export class Game {
     this.chewScratch.length = 0;
     vox.chew(x, y, z, radius, this.chewScratch);
     if (this.chewScratch.length > 0) {
-      // box3d 강체 — the chewed cubes ride the shot, tumble and PILE.
+      // box3d 강체 — the crater erupts: up to 34 real chunks strided across
+      // the whole blast sphere (not just its floor), the odd giant chunk for
+      // weight. 실제 탄보다 넓게 — the house leaves in handfuls.
       const half = vox.halfSize(index);
-      let budget = 16;
-      for (const cube of this.chewScratch) {
-        if (budget-- <= 0) break;
-        this.rubble?.spawn(
-          cube.x, cube.y, cube.z, half, cube.r, cube.g, cube.b,
-          dirX * (9 + this.rng() * 9) + (this.rng() - 0.5) * 6,
-          3 + this.rng() * 6,
-          dirZ * (9 + this.rng() * 9) + (this.rng() - 0.5) * 6,
+      const budget = Math.min(34, this.chewScratch.length);
+      const stride = Math.max(1, Math.floor(this.chewScratch.length / budget));
+      let spawned = 0;
+      for (let i = 0; i < this.chewScratch.length && spawned < budget; i += stride) {
+        const cube = this.chewScratch[i];
+        const big = this.rng() < 0.14;
+        const chunkHalf = half * (big ? 2.4 : 0.85 + this.rng() * 1.1);
+        this.rubble?.spawnRubble(
+          cube.x, cube.y, cube.z, chunkHalf, cube.r, cube.g, cube.b,
+          dirX * (9 + this.rng() * 10) + (this.rng() - 0.5) * 6,
+          3.5 + this.rng() * 7 + (big ? 2.5 : 0),
+          dirZ * (9 + this.rng() * 10) + (this.rng() - 0.5) * 6,
+          (this.rng() - 0.5) * 16, (this.rng() - 0.5) * 16, (this.rng() - 0.5) * 16,
         );
+        spawned += 1;
       }
       this.vfx.hitSpark(x, y, z, dirX, dirZ, () => this.rng());
       if (this.woodSfxTimer <= 0) {
         this.woodSfxTimer = 0.07;
         this.audio.armorClank();
       }
-      this.vfx.demolitionDust(x, y + 0.6, z, 2, () => this.rng());
-      this.shakeTrauma = Math.min(1, this.shakeTrauma + 0.02);
+      this.vfx.demolitionDust(x, y + 0.6, z, 7, () => this.rng());
+      this.debris?.chipBurst(x, y, z, dirX, dirZ, 10, () => this.rng());
+      this.shakeTrauma = Math.min(1, this.shakeTrauma + 0.03);
     }
-    if (vox.aliveRatio(index) < 0.72) this.collapseHouse(index);
+    if (vox.aliveRatio(index) < 0.78) this.collapseHouse(index);
   }
 
   /** 구조 붕괴 — the remaining cubes pancake roof-first; the street loses
@@ -1181,18 +1199,19 @@ export class Game {
     // A slice of the structure becomes REAL rigid bodies — the rest rides
     // the staged fall animation; the bodies pile where they land.
     this.chewScratch.length = 0;
-    const taken = vox.takeVoxels(index, isPalace ? 520 : 420, this.chewScratch);
+    const taken = vox.takeVoxels(index, isPalace ? 380 : 300, this.chewScratch);
     if (taken > 0 && this.rubble) {
       const half = vox.halfSize(index);
       for (const cube of this.chewScratch) {
         const dx = cube.x - center.x;
         const dz = cube.z - center.z;
         const len = Math.hypot(dx, dz) || 1;
-        this.rubble.spawn(
+        this.rubble.spawnRubble(
           cube.x, cube.y, cube.z, half, cube.r, cube.g, cube.b,
-          (dx / len) * (1.2 + this.rng() * 2.4),
-          -0.5 + this.rng() * 3.5,
-          (dz / len) * (1.2 + this.rng() * 2.4),
+          (dx / len) * (2.0 + this.rng() * 4.5),
+          0.5 + this.rng() * 5.5,
+          (dz / len) * (2.0 + this.rng() * 4.5),
+          (this.rng() - 0.5) * 9, (this.rng() - 0.5) * 9, (this.rng() - 0.5) * 9,
         );
       }
     }
@@ -1229,6 +1248,11 @@ export class Game {
 
   private readonly chewScratch: Array<{ x: number; y: number; z: number; r: number; g: number; b: number }> = [];
   private woodSfxTimer = 0;
+  /** Rolling box3d update cost (ms) — the physics budget probe. */
+  private physMs = 0;
+  /** Frame budget split: game update vs GPU submit (perf probes). */
+  private updateMs = 0;
+  private renderMs = 0;
   private collapseDustTimer = 0;
 
   /** Kill-count drum beats — the shareable "how deep did you get" moments. */
@@ -1307,6 +1331,21 @@ export class Game {
     } else if (type !== 'bloater') {
       this.gibs.burst(position.x, gibY, position.z, dirX, dirZ, elite ? 16 : 10, () => this.rng(), elite ? 1.3 : 1);
       this.vfx.bloodBurst(position.x, gibY, position.z, dirX, dirZ, elite ? 14 : 7, () => this.rng());
+    }
+    // 시체 강체 — the body itself becomes a box3d corpse: it rides the shot,
+    // tumbles, and comes to rest ON the rubble heaps. Brutes hit heavier;
+    // bloaters detonate (no corpse — they ARE the blast).
+    if (type !== 'bloater' && this.rubble?.ready) {
+      const brute = type === 'brute';
+      const tint = this.rng();
+      const speed = (7.5 + this.rng() * 7) * (brute ? 0.55 : 1);
+      this.rubble.spawnCorpse(
+        position.x, gibY + 0.15, position.z,
+        this.rng() * Math.PI * 2, brute ? 2.8 : type === 'runner' ? 0.72 : type === 'shield' ? 1.05 : 1,
+        0.09 + tint * 0.07 + (elite ? 0.05 : 0), 0.08 + tint * 0.06, 0.11 + (1 - tint) * 0.08,
+        dirX * speed, 4.5 + this.rng() * 4, dirZ * speed,
+        (this.rng() - 0.5) * 10, (this.rng() - 0.5) * 8, (this.rng() - 0.5) * 10,
+      );
     }
     if (this.splatSfxTimer <= 0) {
       this.splatSfxTimer = 0.07;
@@ -1440,7 +1479,9 @@ export class Game {
     this.gibs.update(delta, groundAt);
     this.vfx.update(delta, groundAt);
     this.debris?.update(delta, this.world.queries());
+    const physT0 = performance.now();
     this.rubble?.update(delta);
+    this.physMs = this.physMs * 0.9 + (performance.now() - physT0) * 0.1;
     this.bloodYard?.update(delta);
     this.impactSfxTimer -= delta;
     this.splatSfxTimer -= delta;
@@ -1734,6 +1775,19 @@ export class Game {
           const dist = [18, this.spawnFar] as const;
           this.horde.spawnWave(150, -Math.PI / 2 + (this.rng() - 0.5) * 0.8, 4, 0.2, 0.55, { brute: 2, bloater: 6, shield: 8, runner: 10 }, dist, { x: this.bunkerX, z: this.bunkerZ });
           this.horde.spawnWave(160, -Math.PI / 2 + (this.rng() - 0.5) * 0.8, 4, 0.2, 0.75, undefined, dist, { x: this.bunkerX, z: this.bunkerZ });
+          // Physics stress: an airborne demolition raining while corpses
+          // pile under the seal — the box3d worst case in one frame budget.
+          const houses = this.world.yardHouses();
+          if (houses.length >= 2) {
+            for (let i = 0; i < 10; i += 1) {
+              const a = i * 0.9;
+              this.debugChewAt(houses[0].x + Math.cos(a) * 4, houses[0].z + Math.sin(a) * 3, 1 + (i % 4) * 1.5, 2.0);
+            }
+            this.debugChewAt(houses[1].x, houses[1].z, 2, 2.4);
+            const near = this.world.houseIndicesNear(houses[1].x, houses[1].z, 8);
+            if (near.length > 0) this.collapseHouse(near[0]);
+          }
+          this.horde.purgeRadius(this.bunkerX, this.bunkerZ - 12, 12, (position, elite, kx, kz, type) => this.onZombieKilled(position, elite, kx, kz, type));
         } else if (name === 'bloodnight') {
           this.hideEndScreen();
           if (this.mode !== 'playing') this.beginRun();
@@ -1941,6 +1995,11 @@ export class Game {
       spin: this.spin,
       kills: this.kills,
       rubble: this.rubble ? this.rubble.bodyCount : -2,
+      corpses: this.rubble ? this.rubble.corpseCount : -2,
+      physMs: +this.physMs.toFixed(2),
+      physAwake: this.rubble?.awakeCount ?? -1,
+      updateMs: +this.updateMs.toFixed(2),
+      renderMs: +this.renderMs.toFixed(2),
       seal: this.sealCharge,
       dawn: this.dawnTimer > 0,
       night: this.nightNumber,
