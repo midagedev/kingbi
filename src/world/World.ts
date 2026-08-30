@@ -250,7 +250,7 @@ export class World {
       { style: 'giwa' as const, dx: 21, dz: -18, rot: -2.6 },
     ];
     // Compact runs a coarser grid — fewer cubes on a phone.
-    const size = this.compact ? 0.52 : 0.42;
+    const size = this.compact ? 0.36 : 0.26;
     const jitterRng = createSeededRandom((seed ^ 0x7ee1) >>> 0);
     // Shared palettes per style (cheoma's own material sharing).
     const palettes = new Map<string, unknown>();
@@ -284,6 +284,11 @@ export class World {
 
   voxelHouseManager(): VoxelHouses | null {
     return this.voxelHouses;
+  }
+
+  /** The street's cube size — debris chunks scale with it. */
+  voxelSize(): number {
+    return this.compact ? 0.36 : 0.26;
   }
 
   /** Collapse tick — drives the pancake animation, dusts landings. */

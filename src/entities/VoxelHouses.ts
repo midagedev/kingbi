@@ -78,16 +78,51 @@ export function voxelizeGroup(
   const a = new THREE.Vector3();
   const b = new THREE.Vector3();
   const c = new THREE.Vector3();
+  const ab = new THREE.Vector3();
+  const ac = new THREE.Vector3();
+  const normal = new THREE.Vector3();
+  const texel = new THREE.Color();
+  const faceColor = new THREE.Color();
   const reachSq = (size * 0.62) * (size * 0.62);
+  // Moon from the north-west ridge: roofs catch it, walls fall away — the
+  // shade turns a cube cloud back into a readable BUILDING.
+  const moon = new THREE.Vector3(-0.38, 0.85, -0.36).normalize();
+  const mapCache = new Map<THREE.Texture, { data: Uint8ClampedArray; w: number; h: number }>();
+  const sampleMaterial = (material: THREE.Material, u: number, v: number): THREE.Color => {
+    faceColor.copy((material as THREE.MeshStandardMaterial).color ?? texel.setRGB(1, 1, 1));
+    const map = (material as THREE.MeshStandardMaterial).map;
+    if (!map?.image) return faceColor;
+    let cached = mapCache.get(map);
+    if (!cached) {
+      const side = 64;
+      const canvas = document.createElement('canvas');
+      canvas.width = side;
+      canvas.height = side;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return faceColor;
+      try {
+        ctx.drawImage(map.image as CanvasImageSource, 0, 0, side, side);
+        cached = { data: ctx.getImageData(0, 0, side, side).data, w: side, h: side };
+      } catch {
+        return faceColor;
+      }
+      mapCache.set(map, cached);
+    }
+    const px = Math.max(0, Math.min(cached.w - 1, Math.floor(u * cached.w)));
+    const py = Math.max(0, Math.min(cached.h - 1, Math.floor((1 - v) * cached.h)));
+    const at = (py * cached.w + px) * 4;
+    texel.setRGB(cached.data[at] / 255, cached.data[at + 1] / 255, cached.data[at + 2] / 255, THREE.SRGBColorSpace);
+    return faceColor.multiply(texel);
+  };
 
   group.traverse((object) => {
     const mesh = object as THREE.Mesh;
     if (!mesh.isMesh || !mesh.geometry) return;
     const material = mesh.material as THREE.Material | THREE.Material[];
     if (Array.isArray(material)) return;
-    const color = (material as THREE.MeshStandardMaterial).color ?? new THREE.Color(0xffffff);
     const pos = mesh.geometry.attributes.position;
     if (!pos) return;
+    const uvAttr = mesh.geometry.attributes.uv;
     const index = mesh.geometry.index;
     const faces = (index ? index.count : pos.count) / 3;
     for (let f = 0; f < faces; f += 1) {
@@ -97,6 +132,22 @@ export function voxelizeGroup(
         vert.set(pos.getX(i), pos.getY(i), pos.getZ(i)).applyMatrix4(mesh.matrixWorld);
       }
       tri.set(a, b, c);
+      // Face color: material base × actual map texel (centroid uv), then
+      // moon-lambert shade — flat base colors alone made the cubes glow
+      // and erased all sense of the house's form.
+      let fu = 0.5;
+      let fv = 0.5;
+      if (uvAttr) {
+        for (let v = 0; v < 3; v += 1) {
+          const i = index ? index.getX(f * 3 + v) : f * 3 + v;
+          fu += uvAttr.getX(i) / 3;
+          fv += uvAttr.getY(i) / 3;
+        }
+      }
+      normal.copy(ab.subVectors(c, a)).cross(ac.subVectors(b, a)).normalize();
+      if (normal.lengthSq() < 0.5) continue;
+      const shade = 0.45 + 0.55 * Math.max(0, normal.dot(moon));
+      const color = sampleMaterial(material, fu, fv).multiplyScalar(shade * 0.88);
       const tx0 = Math.floor((Math.min(a.x, b.x, c.x) - box.min.x) / size) - 1;
       const tx1 = Math.floor((Math.max(a.x, b.x, c.x) - box.min.x) / size) + 1;
       const ty0 = Math.floor((Math.min(a.y, b.y, c.y) - box.min.y) / size) - 1;
@@ -165,7 +216,7 @@ export class VoxelHouses {
 
   constructor(scene: THREE.Scene, capacity: number) {
     const geometry = new THREE.BoxGeometry(1, 1, 1);
-    const material = new THREE.MeshStandardMaterial({ roughness: 0.92, metalness: 0 });
+    const material = new THREE.MeshStandardMaterial({ roughness: 1, metalness: 0, envMapIntensity: 0.45 });
     this.mesh = new THREE.InstancedMesh(geometry, material, capacity);
     this.mesh.frustumCulled = false;
     this.mesh.receiveShadow = true;

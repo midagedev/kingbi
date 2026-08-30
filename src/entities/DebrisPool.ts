@@ -110,6 +110,7 @@ export class DebrisPool {
     power: number,
     rng: () => number,
     life: number,
+    chunkScale = 1,
   ): void {
     for (const voxel of voxels) {
       this.spawn(
@@ -118,7 +119,7 @@ export class DebrisPool {
         power * (0.7 + rng() * 0.7), rng,
         SCRATCH.setRGB(voxel.r, voxel.g, voxel.b),
         life * (0.6 + rng() * 0.7),
-        0.36 + rng() * 0.22,
+        (0.36 + rng() * 0.22) * chunkScale,
       );
     }
   }

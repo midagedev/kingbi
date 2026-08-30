@@ -1141,7 +1141,7 @@ export class Game {
     vox.chew(x, y, z, radius, this.chewScratch);
     if (this.chewScratch.length > 0) {
       this.debris?.burstVoxels(
-        this.chewScratch.slice(0, 7), dirX, dirZ, 2.6, () => this.rng(), 2.6,
+        this.chewScratch.slice(0, 7), dirX, dirZ, 2.6, () => this.rng(), 2.6, 0.9,
       );
       this.vfx.hitSpark(x, y, z, dirX, dirZ, () => this.rng());
       if (this.woodSfxTimer <= 0) {
