@@ -37,7 +37,7 @@ const EXPOSURE_BY_PHASE: Record<'day' | 'sunset' | 'night' | 'dawn', number> = {
 const EXPOSURE_BY_PHASE_COMPACT: Record<'day' | 'sunset' | 'night' | 'dawn', number> = {
   day: 1.05,
   sunset: 1.0,
-  night: 1.38,
+  night: 1.62,
   dawn: 1.05,
 };
 
@@ -227,6 +227,16 @@ export class World {
     this.village = village;
     village.enterVillageMode({ scene: this.scene, env: this.env });
     village.setTime('day', { immediate: true });
+    // The palace is MERGED GEOMETRY without pick proxies — obstacle boxes
+    // never see it, which is how staging probes kept passing while palace
+    // halls stood in the sightline. Measure the real mesh bounds once per
+    // build; the defense staging reads the true courtyard edges from it.
+    this.villageBounds = null;
+    for (const child of this.scene.children) {
+      if (!(child.name ?? '').startsWith('village')) continue;
+      const box = new THREE.Box3().setFromObject(child);
+      if (Number.isFinite(box.min.z) && box.min.z !== Infinity) this.villageBounds = box;
+    }
 
     this.obstacleBoxes = [];
     for (const proxy of village.getPickProxies()) {
@@ -535,8 +545,8 @@ export class World {
       // Compact ships without the IBL envmap (a measured 15fps mobile cost),
       // which left the stone gate and road ~10× darker than desktop at night.
       // Re-cover that fill with direct light instead — same light count.
-      this.sun.intensity = 0.95;
-      this.hemi.intensity = 0.62;
+      this.sun.intensity = 1.3;
+      this.hemi.intensity = 0.9;
     } else {
       this.sun.intensity = 0.58;
       this.hemi.intensity = 0.33;
@@ -646,6 +656,15 @@ export class World {
   private readonly cameraFocusTarget = new THREE.Vector3();
   /** LOD viewer proxy anchored on the defense point (see update()). */
   private lodCamera: THREE.PerspectiveCamera | null = null;
+  /** True mesh bounds of the village/palace group (proxy-blind geometry). */
+  private villageBounds: THREE.Box3 | null = null;
+
+  /** The palace's real north edge + roof line — the staging ground truth. */
+  palaceBounds(): { northZ: number; roofY: number } | null {
+    return this.villageBounds
+      ? { northZ: this.villageBounds.min.z, roofY: this.villageBounds.max.y }
+      : null;
+  }
 
   setFocusTarget(target: THREE.Vector3): void {
     this.cameraFocusTarget.copy(target);

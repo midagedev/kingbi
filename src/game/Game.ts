@@ -147,6 +147,8 @@ export class Game {
   private lastHeight = 0;
   private bunkerX = 0;
   private bunkerZ = 0;
+  /** Spawn ring far edge — clamped to the measured cliff runway. */
+  private spawnFar = 27;
   private bunkerGroundY = 0;
   private godmode = false;
 
@@ -245,13 +247,14 @@ export class Game {
     // (배산) looms behind the wall and the horde pours DOWN its slope
     // toward the gun. Camera stands south over the palace roofs looking
     // north: roof foreground, gun mid-frame, mountain river.
-    // The gun stands in the palace's NORTH yard facing the 배산 — measured,
-    // never fixed. The old -78 offset landed the emplacement against an 80m
-    // cliff wall (the "산 중턱" frame) with the yard houses ON the rock face.
-    // Scan north to where the slope lifts, then keep a 38m flat runway in
-    // front of the gun: street, houses and spawn ring all on level ground,
-    // the mountain reading as a BACKDROP instead of a wall on the lens.
+    // 궁궐 마당 center stage — measured twice over, never fixed: the palace
+    // group's TRUE mesh bounds give the courtyard's south edge (proxies are
+    // blind to the merged halls), the terrain scan gives the 배산 cliff base
+    // to the north. The gun stands ~34m out from the halls with a guaranteed
+    // spawn runway to the cliff; the high-angle rig looks DOWN the big yard
+    // so no roof can ever sit in the sightline.
     const h = queries.heightAt;
+    this.spawnFar = 27;
     if (palace) {
       const baseY = h(palace.x, palace.z - 40);
       let cliffOff = 120;
@@ -261,9 +264,14 @@ export class Game {
           break;
         }
       }
-      const yardOffset = Math.max(30, Math.min(78, cliffOff - 38));
+      const cliffZ = palace.z - cliffOff;
+      const edgeZ = this.world.palaceBounds()?.northZ ?? palace.z - 20;
+      // 22m of courtyard in front of the halls — the camera rig then sits
+      // just past the roofs looking down the yard; at least 18m of spawn
+      // runway to the cliff when the yard runs tight.
+      this.bunkerZ = Math.max(edgeZ - 22, cliffZ + 18);
       this.bunkerX = palace.x;
-      this.bunkerZ = palace.z - yardOffset;
+      this.spawnFar = Math.max(15, Math.min(27, this.bunkerZ - cliffZ - 5));
     } else {
       this.bunkerX = 0;
       this.bunkerZ = -60;
@@ -434,7 +442,7 @@ export class Game {
           const spreadBearing = this.waveBearing + (this.rng() - 0.5) * 0.6;
           // Convergence ring around the palace yard — inside the reserved
           // palace grounds, so no hanok stand in the horde's way.
-          this.horde.spawnWave(batch, spreadBearing, this.day, 0.1 + this.day * 0.015, 1.0, undefined, [14, 27], { x: this.bunkerX, z: this.bunkerZ });
+          this.horde.spawnWave(batch, spreadBearing, this.day, 0.1 + this.day * 0.015, 1.0, undefined, [14, this.spawnFar], { x: this.bunkerX, z: this.bunkerZ });
           this.waveSpawnQueue -= batch;
         }
       } else if (this.horde.activeCount === 0) {
@@ -799,11 +807,12 @@ export class Game {
     // horns/claws/stride), from ~29° above grade. The view PANS toward the
     // aim with a deadzone — sweep the pointer to an edge to look around the
     // ring; recentre to settle. D = orbit radius, H = eye height.
-    // 모바일 중심 세로형 단일 구성: the phone lens is THE lens — desktop
-    // letterboxes the same column. Horizontal-FOV anchored so the lane
-    // width is constant across devices; vertical FOV derives from the
-    // column aspect (9:19 ≈ 72°, clamped for safety).
-    const qv = { dist: 28, height: 21, lookAhead: 10, fov: 0, hFov: 42 };
+    // 모바일 중심 세로형 단일 구성 + 고앵글: the phone lens is THE lens —
+    // desktop letterboxes the same column. High over the big courtyard
+    // (pitch ≈ 55°): houses read as rooftops flanking the lane, the horde
+    // fills the yard, nothing can occlude. Horizontal-FOV anchored so the
+    // lane width is constant across devices.
+    const qv = { dist: 26, height: 38, lookAhead: 2, fov: 0, hFov: 42 };
     let baseFov = 40;
     {
       const aspect = Math.max(0.5, Math.min(2.2, this.canvas.clientWidth / Math.max(1, this.canvas.clientHeight)));
@@ -1566,7 +1575,7 @@ export class Game {
           if (this.mode !== 'playing') this.beginRun();
           this.waveActive = true;
           this.day = 4;
-          const dist = [14, 27] as const;
+          const dist = [14, this.spawnFar] as const;
           this.horde.spawnWave(150, -Math.PI / 2 + (this.rng() - 0.5) * 0.8, 4, 0.2, 0.55, { brute: 2, bloater: 6, shield: 8, runner: 10 }, dist, { x: this.bunkerX, z: this.bunkerZ });
           this.horde.spawnWave(160, -Math.PI / 2 + (this.rng() - 0.5) * 0.8, 4, 0.2, 0.75, undefined, dist, { x: this.bunkerX, z: this.bunkerZ });
         } else if (name === 'bloodnight') {
