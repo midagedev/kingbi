@@ -136,6 +136,28 @@ void bx_remove( int slot )
 	g_aliveCount -= 1;
 }
 
+// Bullet kick: ADD velocity to a slot's body and wake it — the gatling
+// shreds THROUGH the piles (gameplay never blocks on debris), but chunks
+// and corpses must jump and skid back along the shot line.
+void bx_kick( int slot, float jx, float jy, float jz,
+			  float wax, float way, float waz )
+{
+	if ( slot < 0 || slot >= BX_MAX_BODIES || g_alive[slot] == 0 )
+	{
+		return;
+	}
+	if ( b3World_IsValid( g_world ) == false )
+	{
+		return;
+	}
+	b3BodyId body = g_bodies[slot];
+	b3Vec3 v = b3Body_GetLinearVelocity( body );
+	b3Vec3 w = b3Body_GetAngularVelocity( body );
+	b3Body_SetLinearVelocity( body, ( b3Vec3 ){ v.x + jx, v.y + jy, v.z + jz } );
+	b3Body_SetAngularVelocity( body, ( b3Vec3 ){ w.x + wax, w.y + way, w.z + waz } );
+	b3Body_SetAwake( body, true );
+}
+
 void bx_step( float dt, int subSteps )
 {
 	if ( b3World_IsValid( g_world ) == false )

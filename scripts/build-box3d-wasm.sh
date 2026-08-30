@@ -18,7 +18,7 @@ emcc -O3 -msimd128 -D__SSE__=1 -D__SSE2__=1 \
   -s ENVIRONMENT=web \
   -s INITIAL_MEMORY=64MB \
   -s MAXIMUM_MEMORY=256MB \
-  -s EXPORTED_FUNCTIONS=_bx_init,_bx_add_box,_bx_add_static,_bx_remove,_bx_step,_bx_get_states,_bx_clear,_bx_capacity,_bx_alive_count,_bx_awake_count \
+  -s EXPORTED_FUNCTIONS=_bx_init,_bx_add_box,_bx_add_static,_bx_remove,_bx_step,_bx_get_states,_bx_clear,_bx_capacity,_bx_alive_count,_bx_awake_count,_bx_kick \
   -s EXPORTED_RUNTIME_METHODS=HEAPF32 \
   -o wasm/box3d_bridge.js
 cp wasm/box3d_bridge.js wasm/box3d_bridge.wasm public/wasm/

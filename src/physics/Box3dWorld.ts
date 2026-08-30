@@ -28,6 +28,7 @@ interface Box3dModule {
   _bx_alive_count?: () => number;
   _bx_awake_count?: () => number;
   _bx_add_static?: (x: number, y: number, z: number, hx: number, hy: number, hz: number) => void;
+  _bx_kick?: (slot: number, jx: number, jy: number, jz: number, wax: number, way: number, waz: number) => void;
   HEAPF32: Float32Array;
 }
 
@@ -167,6 +168,10 @@ export class Box3dWorld {
   private readonly corpseOrder: number[] = [];
   private readonly rubbleRows: RowLedger;
   private readonly corpseRows: RowLedger;
+  /** Last frame's states run (base index + count in HEAPF32) — the kick
+   *  ray-test reads body positions straight from it, no extra wasm call. */
+  private statesBase = -1;
+  private statesCount = 0;
 
   constructor(scene: THREE.Scene, capacity: number) {
     const geometry = new THREE.BoxGeometry(1, 1, 1);
@@ -406,6 +411,8 @@ export class Box3dWorld {
     const states = module.HEAPF32;
     const base = pointer >> 2;
     const count = states[base] | 0;
+    this.statesBase = base;
+    this.statesCount = count;
     for (let i = 0; i < count; i += 1) {
       const o = base + 1 + i * 8;
       const tagged = states[o + 7];
@@ -429,6 +436,55 @@ export class Box3dWorld {
       }
       record.needsWrite = false;
     }
+  }
+
+  /** 관통 탄도 — the gatling shreds THROUGH the piles: every rubble chunk
+   *  or corpse the line crosses gets kicked back along the shot (and wakes
+   *  up). Gameplay never blocks on debris — the bullet keeps its zombie /
+   *  house target; the piles just react. Reads positions from the cached
+   *  states run; jolt variance is a slot-hash (deterministic, no rng). */
+  kickAlongRay(ox: number, oy: number, oz: number, dx: number, dy: number, dz: number, maxDist: number): number {
+    const module = this.module;
+    if (!module?._bx_kick || this.statesBase < 0 || this.statesCount === 0) return 0;
+    // Churn guard: when the field is already boiling (stress purges,
+    // demolition rains) more wakes only feed the physics bill.
+    if ((module._bx_awake_count?.() ?? 0) > 120) return 0;
+    const states = module.HEAPF32;
+    const hits: Array<{ slot: number; t: number }> = [];
+    for (let i = 0; i < this.statesCount; i += 1) {
+      const o = this.statesBase + 1 + i * 8;
+      const slot = states[o + 7] | 0;
+      const record = this.slots[slot];
+      if (!record?.active) continue;
+      const px = states[o] - ox;
+      const py = states[o + 1] - oy;
+      const pz = states[o + 2] - oz;
+      const t = px * dx + py * dy + pz * dz;
+      if (t < 0.5 || t > maxDist) continue;
+      const rx = px - dx * t;
+      const ry = py - dy * t;
+      const rz = pz - dz * t;
+      const radius = record.layer === 0 ? record.sx * 0.62 : 0.42 * record.sx;
+      if (rx * rx + ry * ry + rz * rz > radius * radius) continue;
+      hits.push({ slot, t });
+    }
+    if (hits.length === 0) return 0;
+    hits.sort((a, b) => a.t - b.t);
+    const kicked = Math.min(hits.length, 2);
+    for (let i = 0; i < kicked; i += 1) {
+      const { slot } = hits[i];
+      const record = this.slots[slot];
+      const variance = 0.72 + 0.56 * ((slot * 0.618) % 1);
+      const power = (record.layer === 0 ? 8.5 : 4.2) * variance;
+      module._bx_kick?.(
+        slot,
+        dx * power, 1.6 + power * 0.22, dz * power,
+        (variance - 1) * 9, variance * 5, (1 - variance) * 9,
+      );
+      // Woke by the kick — the next state run must rewrite its matrix.
+      record.needsWrite = true;
+    }
+    return kicked;
   }
 
   /** Wave sweep: corpses clear between waves (they'd bury the yard by

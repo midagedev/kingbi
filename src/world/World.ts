@@ -377,13 +377,23 @@ export class World {
     const site = this.village?.plan.site;
     if (!site) return;
     // Material progression down the lane — 개틀링 → 초가집(약함, 근거리)
-    // → 기와집(강함, 원거리) → 궁(보스 배경). Near pairs face the lane
-    // dead-on; the far pair's half-diagonal still clears the firing line.
-    const specs = [
+    // → 기와집(강함, 원거리) → 궁(보스 배경). Desktop clusters SIX houses
+    // across three depth rows — the near pair pulled INTO the sweep radius,
+    // an inner pair deep in the lane (the horde river splits around them),
+    // the giwa pair as the outer anchors — a staggered village instead of
+    // one wide row. Compact keeps the four-house row (instance budget).
+    const specs = this.compact ? [
       { style: 'choga' as const, dx: -20, dz: -13, rot: 0 },
       { style: 'choga' as const, dx: 21, dz: -14, rot: 0 },
       { style: 'giwa' as const, dx: -23, dz: -19, rot: 2.6 },
       { style: 'giwa' as const, dx: 23, dz: -20, rot: -2.6 },
+    ] : [
+      { style: 'choga' as const, dx: -14, dz: -12, rot: 0.15 },
+      { style: 'choga' as const, dx: 14.5, dz: -13, rot: -0.1 },
+      { style: 'choga' as const, dx: -7.5, dz: -24, rot: 1.1, vox: 0.32 },
+      { style: 'choga' as const, dx: 7.5, dz: -25, rot: -1.05, vox: 0.32 },
+      { style: 'giwa' as const, dx: -25, dz: -21.5, rot: 2.6 },
+      { style: 'giwa' as const, dx: 25, dz: -22.5, rot: -2.6 },
     ];
     // Voxel LOD by distance — near row runs FINE (0.16: roofline and wall
     // openings read at close range), the village thatch at mid distance
@@ -396,7 +406,7 @@ export class World {
     const jitterRng = createSeededRandom((seed ^ 0x7ee1) >>> 0);
     // Shared palettes per style (cheoma's own material sharing).
     const palettes = new Map<string, unknown>();
-    const results: Array<{ x: number; z: number; data: ReturnType<typeof voxelizeGroup> }> = [];
+    const results: Array<{ x: number; z: number; vox?: number; data: ReturnType<typeof voxelizeGroup> }> = [];
     for (const spec of specs) {
       const source = buildBuilding({
         ...PRESETS[spec.style],
@@ -408,8 +418,8 @@ export class World {
       const z = cz + spec.dz;
       source.position.set(x, groundAt(x, z), z);
       source.rotation.y = spec.rot;
-      const data = voxelizeGroup(source, size, jitterRng);
-      results.push({ x, z, data });
+      const data = voxelizeGroup(source, spec.vox ?? size, jitterRng);
+      results.push({ x, z, vox: spec.vox, data });
       disposeBuilding(source);
     }
     // The palace joins the same chewable street: its polygonal meshes go
@@ -492,7 +502,7 @@ export class World {
     this.voxelHouses = new VoxelHouses(this.scene, total);
     for (const result of results) {
       if (!result.data) continue;
-      const index = this.voxelHouses.addHouse(result.data, size);
+      const index = this.voxelHouses.addHouse(result.data, result.vox ?? size);
       if (index < 0) break;
       this.houses.push({ x: result.x, z: result.z, box: result.data.box });
       this.obstacleBoxes.push(result.data.box.clone());

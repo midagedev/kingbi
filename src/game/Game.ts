@@ -1139,6 +1139,11 @@ export class Game {
       endY = muzzle.y + shotSlope * missDist - 0.6;
     }
 
+    // 관통 탄도 — the round tears through the piles on its way: chunks and
+    // corpses along the line kick back and skid (the hit itself still lands
+    // on the zombie/house — debris never eats a bullet).
+    const flight = Math.hypot(endX - muzzle.x, endZ - muzzle.z) || 30;
+    this.rubble?.kickAlongRay(muzzle.x, muzzle.y, muzzle.z, dirX, shotSlope, dirZ, flight);
     this.tracers.spawnTracer(muzzle, this.tmpV2.set(endX, endY, endZ));
     // Casing ejects to the gun's right.
     this.tracers.spawnCasing(muzzle.x, muzzle.y, muzzle.z, rightX, rightZ, () => this.rng());
