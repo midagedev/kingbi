@@ -188,6 +188,12 @@ export class World {
     this.village = village;
     village.enterVillageMode({ scene: this.scene, env: this.env });
     village.setTime('day', { immediate: true });
+    // 땅 평탄화 — iron the playfield flat BEFORE anything bakes heights off
+    // it (atmosphere, proxies, voxel houses, zombies all read heightAt).
+    const palace0 = village.plan?.features?.palace;
+    if (palace0 && Number.isFinite(palace0.x) && Number.isFinite(palace0.z)) {
+      this.flattenPlayfield({ x: palace0.x, z: palace0.z });
+    }
     // The palace is MERGED GEOMETRY without pick proxies — obstacle boxes
     // never see it, which is how staging probes kept passing while palace
     // halls stood in the sightline. Measure the real mesh bounds once per
@@ -259,10 +265,14 @@ export class World {
       { style: 'giwa' as const, dx: -23, dz: -19, rot: 2.6 },
       { style: 'giwa' as const, dx: 23, dz: -20, rot: -2.6 },
     ];
-    // Chunky house cubes — debris reads at 27m camera height (0.18 made the
-    // blasts look like dust); the distant palace still runs coarse.
-    const size = this.compact ? 0.32 : 0.24;
+    // Voxel LOD by distance — near row runs FINE (0.16: roofline and wall
+    // openings read at close range), the village thatch at mid distance
+    // runs coarse, the palace backdrop coarsest. Shape where you look,
+    // budget where you don't.
+    const size = this.compact ? 0.22 : 0.16;
+    const streetSize = this.compact ? 0.36 : 0.3;
     const palaceSize = this.compact ? 0.68 : 0.7;
+    const groundAt = this.queries().heightAt;
     const jitterRng = createSeededRandom((seed ^ 0x7ee1) >>> 0);
     // Shared palettes per style (cheoma's own material sharing).
     const palettes = new Map<string, unknown>();
@@ -276,7 +286,7 @@ export class World {
       palettes.set(spec.style, (source as unknown as { userData: { materials?: unknown } }).userData.materials);
       const x = cx + spec.dx;
       const z = cz + spec.dz;
-      source.position.set(x, Number(site.heightAt?.(x, z) ?? 0), z);
+      source.position.set(x, groundAt(x, z), z);
       source.rotation.y = spec.rot;
       const data = voxelizeGroup(source, size, jitterRng);
       results.push({ x, z, data });
@@ -293,7 +303,7 @@ export class World {
       // The village group spans the whole mountain (582m) — filter to the
       // palace compound only, or the grid drowns and the voxelize no-ops
       // (the silent "궁이 안 부서진다" bug).
-      const palaceGroundY = Number(site.heightAt?.(cx, cz - 110) ?? 5);
+      const palaceGroundY = groundAt(cx, cz - 110);
       const palaceFilter = { cx: cx, cz: cz - 110, rx: 58, rz: 42, yMax: palaceGroundY + 22 };
       palaceData = voxelizeGroup(villageRoot as THREE.Group, palaceSize, jitterRng, palaceFilter);
       console.info('[palace-voxelize]', palaceData
@@ -320,7 +330,7 @@ export class World {
       // corridor stays mesh-only so the firing lane never gets a bullet
       // sponge. Only HOUSE-SIZED meshes voxelize and go dark (mountain
       // slabs stay meshes); palace grounds excluded; clustered per building.
-      const streetGroundY = Number(site.heightAt?.(cx, cz - 53) ?? 5);
+      const streetGroundY = groundAt(cx, cz - 53);
       let streetCubes = 0;
       for (const side of [-1, 1]) {
         const strip = {
@@ -329,7 +339,7 @@ export class World {
           meshFilter: (footprintX: number, footprintZ: number, maxY: number) =>
             footprintX <= 45 && footprintZ <= 45 && maxY <= streetGroundY + 10,
         };
-        const stripRaw = voxelizeGroup(villageRoot as THREE.Group, size, jitterRng, strip);
+        const stripRaw = voxelizeGroup(villageRoot as THREE.Group, streetSize, jitterRng, strip);
         if (!stripRaw) continue;
         streetCubes += stripRaw.sx.length;
         villageRoot.traverse((object) => {
@@ -368,7 +378,7 @@ export class World {
       this.obstacleBoxes.push(result.data.box.clone());
     }
     for (const data of streetDatas) {
-      const index = this.voxelHouses.addHouse(data, size);
+      const index = this.voxelHouses.addHouse(data, streetSize);
       if (index < 0) break;
       // Hit-testable but NOT zombie obstacles — the north lane stays open
       // (the palace already follows this rule).
@@ -458,7 +468,7 @@ export class World {
 
   /** The street's cube size — debris chunks scale with it. */
   voxelSize(): number {
-    return this.compact ? 0.32 : 0.24;
+    return this.compact ? 0.22 : 0.16;
   }
 
   /** Collapse tick — drives the pancake animation, dusts landings. */
@@ -551,13 +561,100 @@ export class World {
   }
 
   get villageSeed(): number {
-    return typeof this.village?.plan?.opts?.seed === 'number' ? (this.village.plan.opts.seed as number) : 0;
+    return typeof this.village?.plan?.opts?.seed === 'number' ? this.village.plan.opts.seed as number : 0;
+  }
+
+  /** 평탄화 사양 — set by flattenPlayfield; queries().heightAt blends every
+   *  gameplay height query into the flat plane so ground reads, walks and
+   *  physics all agree. */
+  private flatSpec: { y: number; z0: number; z1: number; x0: number; x1: number; blend: number } | null = null;
+
+  /** 1 inside the hard box, smoothstep-easing to 0 across the shoulder. */
+  private flatFactor(x: number, z: number): number {
+    const f = this.flatSpec;
+    if (!f) return 0;
+    const dz = z < f.z0 ? f.z0 - z : z > f.z1 ? z - f.z1 : 0;
+    const dx = x < f.x0 ? f.x0 - x : x > f.x1 ? x - f.x1 : 0;
+    const dist = Math.max(dz, dx);
+    if (dist >= f.blend) return 0;
+    const t = 1 - dist / f.blend;
+    return t * t * (3 - 2 * t);
+  }
+
+  /** 완전 평탄화 — the yard slope (0.4→4.1m toward the palace) reads as
+   *  difficulty, not drama: iron the playfield to one height at the defense
+   *  line. Terrain slabs flatten per-vertex (normals rebaked); house-sized
+   *  meshes ride down whole; the palace compound and mountain keep their
+   *  shape beyond the shoulder. */
+  flattenPlayfield(palace: { x: number; z: number }): void {
+    const site = this.village?.plan?.site;
+    if (!site?.heightAt) return;
+    const y = Number(site.heightAt(palace.x, palace.z + 90));
+    if (!Number.isFinite(y)) return;
+    this.flatSpec = {
+      y,
+      // Hard box: from just south of the palace compound (the halls begin
+      // ~9m north of the feature point; the voxel bake runs AFTER this so
+      // a slightly-northern shoulder is consistent) to past the spawn ring.
+      z0: palace.z + 18, z1: palace.z + 155,
+      x0: palace.x - 78, x1: palace.x + 78,
+      blend: 14,
+    };
+    const root = this.scene.children.find((child) => (child.name ?? '').startsWith('village'));
+    if (!root) return;
+    root.updateMatrixWorld(true);
+    root.traverse((object) => {
+      const mesh = object as THREE.Mesh;
+      if (!mesh.isMesh || !mesh.geometry) return;
+      if (!mesh.geometry.boundingBox) mesh.geometry.computeBoundingBox();
+      const bb = mesh.geometry.boundingBox;
+      if (!bb) return;
+      const mxw = mesh.matrixWorld.elements;
+      const w = bb.max.x - bb.min.x;
+      const d = bb.max.z - bb.min.z;
+      if (w > 45 || d > 45) {
+        // Terrain slab — iron vertices (transforms are translation-only;
+        // the same assumption the palace-hide pass already relies on).
+        const pos = mesh.geometry.attributes.position;
+        if (!pos) return;
+        for (let i = 0; i < pos.count; i += 1) {
+          const wx = pos.getX(i) + mxw[12];
+          const wz = pos.getZ(i) + mxw[14];
+          const factor = this.flatFactor(wx, wz);
+          if (factor <= 0) continue;
+          const wy = pos.getY(i) + mxw[13];
+          pos.setY(i, wy + (y - wy) * factor - mxw[13]);
+        }
+        pos.needsUpdate = true;
+        mesh.geometry.computeVertexNormals();
+        mesh.geometry.boundingBox = null;
+        mesh.geometry.boundingSphere = null;
+      } else {
+        // House-sized mesh — ride it down to the plane as one rigid piece.
+        const cx = (bb.min.x + bb.max.x) / 2 + mxw[12];
+        const cz = (bb.min.z + bb.max.z) / 2 + mxw[14];
+        const factor = this.flatFactor(cx, cz);
+        if (factor <= 0) return;
+        const baseY = bb.min.y + mxw[13];
+        const target = baseY + (y - baseY) * factor;
+        mesh.position.y += target - baseY;
+        mesh.updateMatrixWorld(true);
+      }
+    });
   }
 
   queries(): WorldQueries {
     const site = this.village?.plan?.site;
-    const heightAt = (x: number, z: number): number =>
+    const rawHeightAt = (x: number, z: number): number =>
       Number.isFinite(site?.heightAt?.(x, z)) ? (site!.heightAt!(x, z) as number) : 0;
+    // 평탄화 — every gameplay height (zombies, chew, corpses, tiles, FX)
+    // reads through the flatten blend so it matches the ironed mesh.
+    const heightAt = (x: number, z: number): number => {
+      if (!this.flatSpec) return rawHeightAt(x, z);
+      const raw = rawHeightAt(x, z);
+      const factor = this.flatFactor(x, z);
+      return factor <= 0 ? raw : raw + (this.flatSpec.y - raw) * factor;
+    };
     const streamZat = site?.streamZat;
     const radius = typeof site?.R === 'number' ? site.R : 105;
     const rects = this.obstacleBoxes.map((box) => ({
