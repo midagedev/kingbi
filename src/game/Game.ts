@@ -810,12 +810,12 @@ export class Game {
     // horns/claws/stride), from ~29° above grade. The view PANS toward the
     // aim with a deadzone — sweep the pointer to an edge to look around the
     // ring; recentre to settle. D = orbit radius, H = eye height.
-    // 모바일 중심 세로형 단일 구성 + 고앵글: the phone lens is THE lens —
-    // desktop letterboxes the same column. High over the big courtyard:
-    // hFov 36 zooms the yard in a step (the flanking rooftops sit at the
-    // frame RIM, the yard reads spacious), lookAhead 10 drops the gun to
-    // the lower third while the lane fills the middle of the frame.
-    const qv = { dist: 26, height: 38, lookAhead: 10, fov: 0, hFov: 36 };
+    // 모바일 중심 세로형 단일 구성: the phone lens is THE lens — desktop
+    // letterboxes the same column. Over the open field at a cinematic
+    // pitch (~35°): hFov 36 keeps the zoom, lookAhead 10 holds the gun in
+    // the lower third, and the lowered eye stands the fallen palace UP in
+    // the background — the horde reads full-body mid-frame.
+    const qv = { dist: 26, height: 27, lookAhead: 10, fov: 0, hFov: 36 };
     let baseFov = 40;
     {
       const aspect = Math.max(0.5, Math.min(2.2, this.canvas.clientWidth / Math.max(1, this.canvas.clientHeight)));
