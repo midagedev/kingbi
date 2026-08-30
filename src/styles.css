@@ -259,17 +259,17 @@ canvas {
 #wave-banner {
   position: absolute;
   left: 50%;
-  top: 22%;
+  top: 8.5%;
   transform: translate(-50%, -8px) skewX(-6deg);
-  padding: 10px 28px;
+  padding: 7px 20px;
   border-radius: 0;
   background: rgba(6, 5, 5, 0.9);
   border-top: 2px solid var(--blood);
   border-bottom: 2px solid var(--blood);
   color: var(--paper);
-  font-size: 19px;
+  font-size: 15px;
   font-weight: 700;
-  letter-spacing: 0.26em;
+  letter-spacing: 0.2em;
   opacity: 0;
   transition: opacity 0.5s ease, transform 0.5s ease;
   white-space: nowrap;
@@ -531,8 +531,10 @@ canvas {
   #bunker-cluster { min-width: 168px; font-size: 11px; bottom: max(220px, calc(env(safe-area-inset-bottom) + 208px)); }
   #heat-cluster { width: 52vw; bottom: max(210px, calc(env(safe-area-inset-bottom) + 198px)); }
   #seal-cluster { width: 44vw; bottom: max(236px, calc(env(safe-area-inset-bottom) + 224px)); }
-  #wave-banner { font-size: 13px; top: 16%; letter-spacing: 0.16em; }
+  #wave-banner { font-size: 12px; top: 8%; letter-spacing: 0.16em; }
   #combo-badge { font-size: 14px; top: 20%; }
+  #stamp { top: 132px; }
+  #stamp-char { font-size: 54px; }
 }
 
 /* ── Cinema letterbox (slow-mo kill cam) ─────────────────────────── */
@@ -663,26 +665,28 @@ canvas {
 
 /* ── Stylish layer: kill stamps, ranks, impact frames, speed lines ── */
 
-/* Brush-stamp slam — Persona-kinetic typography on a Joseon seal. */
+/* Brush-stamp slam — Joseon seal pressed at the frame's corner. It used to
+ * slam dead-center (top 40%) and cover the horde mid-fight; now it lives
+ * top-right under the rank layer, small enough to read as a mark, not a
+ * wall. */
 #stamp {
   position: absolute;
-  left: 50%;
-  top: 40%;
-  transform: translate(-50%, -50%);
+  right: max(16px, env(safe-area-inset-right));
+  top: max(158px, calc(env(safe-area-inset-top) + 146px));
   display: flex;
   flex-direction: column;
-  align-items: center;
+  align-items: flex-end;
   gap: 2px;
   pointer-events: none;
   opacity: 0;
   z-index: 35;
 }
 #stamp.on {
-  animation: stamp-slam 1.15s cubic-bezier(0.16, 1.2, 0.3, 1) forwards;
+  animation: stamp-slam 0.9s cubic-bezier(0.16, 1.2, 0.3, 1) forwards;
 }
 #stamp-char {
   font-family: "Song Myung", "Nanum Brush Script", "Apple SD Gothic Neo", serif;
-  font-size: clamp(150px, 30vmin, 300px);
+  font-size: clamp(58px, 11.5vmin, 108px);
   font-weight: 900;
   line-height: 0.95;
   color: #e8102e;
@@ -693,20 +697,20 @@ canvas {
   transform: rotate(-4deg);
 }
 #stamp-sub {
-  font-size: clamp(15px, 2.6vmin, 24px);
+  font-size: clamp(11px, 1.9vmin, 16px);
   font-weight: 800;
-  letter-spacing: 0.55em;
+  letter-spacing: 0.34em;
   color: #ffffff;
   text-shadow: 2px 2px 0 rgba(0, 0, 0, 0.9);
   transform: skewX(-8deg);
 }
 @keyframes stamp-slam {
-  0%   { opacity: 0; transform: translate(-50%, -50%) scale(2.6) rotate(3deg); }
-  12%  { opacity: 1; transform: translate(-50%, -50%) scale(0.92) rotate(-4deg); }
-  22%  { opacity: 1; transform: translate(-50%, -50%) scale(1.04) rotate(-4deg); }
-  30%  { opacity: 1; transform: translate(-50%, -50%) scale(1) rotate(-4deg); }
-  72%  { opacity: 1; }
-  100% { opacity: 0; transform: translate(-50%, -50%) scale(1.02) rotate(-4deg); }
+  0%   { opacity: 0; transform: scale(2.2) rotate(3deg); }
+  12%  { opacity: 1; transform: scale(0.92) rotate(-4deg); }
+  22%  { opacity: 1; transform: scale(1.04) rotate(-4deg); }
+  30%  { opacity: 1; transform: scale(1) rotate(-4deg); }
+  60%  { opacity: 1; }
+  100% { opacity: 0; transform: scale(1.02) rotate(-4deg); }
 }
 
 /* Combo rank — escalating stylish-action grade. */

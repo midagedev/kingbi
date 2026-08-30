@@ -187,7 +187,7 @@ export class Game {
     this.horde.onSpawn = (type) => {
       if (type !== 'brute' || this.announcedBrute) return;
       this.announcedBrute = true;
-      this.hud.showWave('거구 원귀가 온다 — 걸어서라도');
+      this.hud.showWave('거구 원귀가 온다');
       this.audio.roar();
     };
 
@@ -753,7 +753,8 @@ export class Game {
     this.hud.setSeal(this.sealCharge);
     if (this.sealCharge >= 1 && !this.sealAnnounced) {
       this.sealAnnounced = true;
-      this.hud.showWave('부적이 가득 찼다 — 다음 발사가 봉인이 된다');
+      // No banner — the ring already went paper-white and the gauge says
+      // 봉인 준비; the bell is the only voice this beat needs.
       this.audio.bell();
     } else if (this.sealCharge < 1) {
       this.sealAnnounced = false;
@@ -823,16 +824,19 @@ export class Game {
         queries.heightAt(this.aimPoint.x, this.aimPoint.z) + 0.2,
         this.aimPoint.z,
       );
-      // 봉인 준비 — the ring goes paper-white and breathes: the armed
-      // talisman reads at a glance against the red idle reticle.
+      // 봉인 준비 — the ring becomes the BLAST RADIUS PREVIEW: paper-white,
+      // breathing, sized to the 9.5m purge. No words needed — the ring
+      // shows exactly what the next trigger stroke clears.
       const armed = this.sealCharge >= 1;
       const pulse = armed
-        ? 1.2 + Math.sin(this.elapsed * 9) * 0.08
+        ? 3.1 + Math.sin(this.elapsed * 9) * 0.12
         : look.fireHeld ? 1 + Math.sin(this.elapsed * 18) * 0.12 : 1;
       this.aimRing.scale.setScalar(pulse);
       const ringMat = this.aimRing.material as THREE.MeshBasicMaterial;
       ringMat.color.setHex(armed ? 0xfff1e2 : 0xff2a1c);
-      ringMat.opacity = armed ? 1 : look.fireHeld ? 1 : 0.92;
+      // Armed runs big + additive: full opacity there blows out the bloom
+      // pass (a whiteout). A pale ghost ring reads better AND safer.
+      ringMat.opacity = armed ? 0.42 : look.fireHeld ? 1 : 0.92;
     }
     void delta;
   }
@@ -999,7 +1003,6 @@ export class Game {
           if (this.heat >= 1) {
             this.ventTimer = VENT_SECONDS;
             this.audio.vent();
-            this.hud.showWave('과열 — 냉각 중!');
             this.shakeTrauma = Math.min(1, this.shakeTrauma + 0.5);
             break;
           }
@@ -1247,9 +1250,6 @@ export class Game {
     }
     vox.triggerCollapse(index, () => this.rng());
     this.hud.stamp('崩', isPalace ? '궁이 무너진다' : '집이 무너진다');
-    this.hud.showWave(isPalace
-      ? '궁이 무너진다 — 밤이 끝난다'
-      : '한 채가 무너졌다 — 부적에 먹이 들었다');
     this.shakeTrauma = Math.min(1, this.shakeTrauma + 0.5);
     this.fovPunch = Math.min(1.4, this.fovPunch + 0.6);
     this.world.impactAberration(1.4);
@@ -1301,7 +1301,8 @@ export class Game {
     const list = Game.KILL_MILESTONES;
     while (this.nextMilestone < list.length && this.kills >= list[this.nextMilestone].at) {
       const milestone = list[this.nextMilestone];
-      this.hud.showWave(milestone.text);
+      // No banner — the counter climbing + the bell carry the beat; the
+      // 鬼 seal marks the big hundreds visually.
       this.audio.bell();
       this.fovPunch = Math.min(1.4, this.fovPunch + 0.25);
       this.world.impactAberration(0.5);
@@ -1309,7 +1310,6 @@ export class Game {
       this.nextMilestone += 1;
     }
     if (this.nextMilestone >= list.length && this.kills >= this.extraMilestone) {
-      this.hud.showWave(`${this.kills} 귀 — 멈추지 않는다`);
       this.audio.bell();
       this.extraMilestone += 1000;
     }
@@ -1543,13 +1543,14 @@ export class Game {
   /** The seal's 封 stamp owns the frame — chained bloater 爆 stamps yield. */
   private sealStampLock = 0;
 
-  /** One controls reminder early in a newcomer's first couple of runs. */
+  /** One control line for a newcomer's first couple of runs — everything
+   *  else teaches itself: heat shows on the gauge, the seal on the ring. */
   private updateHints(delta: number): void {
-    if (this.hintTimer <= 0) return;
+    if (this.hintTimer < 0) return;
     this.hintTimer -= delta;
-    if (this.hintTimer <= 0) {
-      this.hud.showWave('조준 — 마우스 이동 · 발사 — 클릭 홀드 · 과열 주의');
-    }
+    if (this.hintTimer > 0) return;
+    this.hud.showWave('누르고 있으면 개틀링이 쏜다');
+    this.hintTimer = -1;
   }
 
   private die(): void {
@@ -1621,7 +1622,7 @@ export class Game {
     this.hud.setSpeedlines(false);
     const runs = Number(localStorage.getItem('tilldawn-siege-runs') || '0') + 1;
     localStorage.setItem('tilldawn-siege-runs', String(runs));
-    this.hintTimer = runs <= 2 ? 2.4 : -1;
+    this.hintTimer = runs <= 2 ? 2.0 : -1;
     this.elapsed = 0;
     this.waveActive = false;
     this.waveSpawnQueue = 0;
@@ -1637,7 +1638,7 @@ export class Game {
     this.gunnerInstance?.reset();
     this.hud.setScore(0);
     this.hud.setBunker(this.bunkerHp, this.bunkerMax);
-    this.hud.showWave('밤이 시작된다 — 개틀링을 준비하라');
+    this.hud.showWave('밤이 시작된다');
     this.lookTarget.set(0, this.bunkerGroundY + 1, -3);
     this.aimPoint.set(0, this.bunkerGroundY, -14);
     this.world.setTimeOfDay('night', { immediate: true });

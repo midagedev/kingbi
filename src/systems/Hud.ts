@@ -36,6 +36,7 @@ export class Hud {
   private bannerTimer = 0;
   private comboTimer = 0;
   private vignetteTimer = 0;
+  private stampCooldown = 0;
   private readonly stampEl = this.getElement('#stamp');
   private readonly stampChar = this.getElement('#stamp-char');
   private readonly stampSub = this.getElement('#stamp-sub');
@@ -44,8 +45,12 @@ export class Hud {
   private readonly speedlinesEl = this.getElement('#speedlines');
   private rankTier = -1;
 
-  /** 낙관 스탬프 — a red seal pressed onto the painting for the big beats. */
+  /** 낙관 스탬프 — a red seal pressed onto the painting for the big beats.
+   *  Throttled: brute packs and chained events used to machine-gun the
+   *  center of the screen; overlapping slams are dropped, not queued. */
   stamp(char: string, sub = ''): void {
+    if (this.stampCooldown > 0) return;
+    this.stampCooldown = 1.35;
     this.stampChar.textContent = char;
     this.stampSub.textContent = sub;
     this.stampEl.classList.remove('on');
@@ -124,7 +129,7 @@ export class Hud {
   showWave(text: string): void {
     this.waveBanner.textContent = text;
     this.waveBanner.classList.add('visible');
-    this.bannerTimer = 2.6;
+    this.bannerTimer = 1.9;
   }
 
   setCombo(count: number): void {
@@ -194,6 +199,7 @@ export class Hud {
   }
 
   update(delta: number): void {
+    this.stampCooldown = Math.max(0, this.stampCooldown - delta);
     if (this.bannerTimer > 0) {
       this.bannerTimer -= delta;
       if (this.bannerTimer <= 0) this.waveBanner.classList.remove('visible');
