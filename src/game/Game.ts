@@ -2042,6 +2042,8 @@ export class Game {
       kills: this.kills,
       rubble: this.rubble ? this.rubble.bodyCount : -2,
       corpses: this.rubble ? this.rubble.corpseCount : -2,
+      corpseVisual: this.rubble ? this.rubble.corpseVisual : -2,
+      rubbleVisual: this.rubble ? this.rubble.rubbleVisual : -2,
       windows: this.world.voxelHouseManager()?.glowMesh.count ?? -1,
       physMs: +this.physMs.toFixed(2),
       physAwake: this.rubble?.awakeCount ?? -1,
