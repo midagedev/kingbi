@@ -234,9 +234,73 @@ export class World {
   private disposeYardHouses(): void {
     this.voxelHouses?.dispose();
     this.voxelHouses = null;
+    this.disposeYardLanterns();
     this.obstacleBoxes = this.obstacleBoxes.filter((box) =>
       !this.houses.some((house) => house.box === box));
     this.houses = [];
+  }
+
+  /** 마당 석등 — warm anchors around the defense point. The flattened yard
+   *  lost the candle-lit well to the re-staged viewpoint; four stone
+   *  lanterns give the night its focal warmth (and real point lights). */
+  private yardLanterns: THREE.Group[] = [];
+  private yardLanternLights: THREE.PointLight[] = [];
+  private lanternTime = 0;
+
+  placeYardLanterns(cx: number, cz: number): void {
+    this.disposeYardLanterns();
+    const queries = this.queries();
+    const spots: Array<[number, number]> = [
+      [cx - 7.5, cz - 2], [cx + 7.5, cz - 2],
+      [cx - 11, cz - 14], [cx + 11, cz - 14],
+    ];
+    const stone = new THREE.MeshStandardMaterial({ color: 0x4a474e, roughness: 0.95 });
+    const flameMat = new THREE.MeshBasicMaterial({ color: 0xffb45e, toneMapped: false });
+    spots.forEach(([x, z], i) => {
+      const ground = queries.heightAt(x, z);
+      const group = new THREE.Group();
+      const pedestal = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.3, 0.95, 7), stone);
+      pedestal.position.y = 0.48;
+      const shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.09, 0.4, 6), stone);
+      shaft.position.y = 1.12;
+      const flame = new THREE.Mesh(new THREE.BoxGeometry(0.26, 0.3, 0.26), flameMat);
+      flame.position.y = 1.42;
+      const roof = new THREE.Mesh(new THREE.ConeGeometry(0.42, 0.34, 4), stone);
+      roof.position.y = 1.68;
+      roof.rotation.y = Math.PI / 4;
+      const light = new THREE.PointLight(0xffa04a, 2.4, 17, 2);
+      light.position.y = 1.45;
+      group.add(pedestal, shaft, flame, roof, light);
+      group.position.set(x, ground, z);
+      group.rotation.y = i * 0.7;
+      group.name = 'yard-lantern';
+      this.scene.add(group);
+      this.yardLanterns.push(group);
+      this.yardLanternLights.push(light);
+    });
+  }
+
+  private disposeYardLanterns(): void {
+    for (const group of this.yardLanterns) {
+      group.traverse((object) => {
+        const mesh = object as THREE.Mesh;
+        if (mesh.isMesh) mesh.geometry.dispose();
+      });
+      group.removeFromParent();
+    }
+    this.yardLanterns = [];
+    this.yardLanternLights = [];
+  }
+
+  /** Candle-flicker for the yard lanterns (deterministic in game time). */
+  updateYardLanterns(delta: number): void {
+    if (this.yardLanternLights.length === 0) return;
+    this.lanternTime += delta;
+    for (let i = 0; i < this.yardLanternLights.length; i += 1) {
+      const phase = i * 1.7;
+      const flicker = 0.82 + 0.18 * Math.sin(this.lanternTime * 7.3 + phase) * Math.sin(this.lanternTime * 2.9 + phase * 1.3);
+      this.yardLanternLights[i].intensity = 2.4 * flicker;
+    }
   }
 
   /** Run restart: all cubes back in place, footprints whole. */
@@ -254,6 +318,7 @@ export class World {
    *  VoxelHouses). */
   placeYardHouses(cx: number, cz: number, seed: number): void {
     this.disposeYardHouses();
+    this.placeYardLanterns(cx, cz);
     const site = this.village?.plan.site;
     if (!site) return;
     // Material progression down the lane — 개틀링 → 초가집(약함, 근거리)
@@ -474,6 +539,7 @@ export class World {
   /** Collapse tick — drives the pancake animation, dusts landings. */
   updateVoxelHouses(delta: number, onLand: (x: number, y: number, z: number) => void): void {
     this.voxelHouses?.update(delta, onLand);
+    this.updateYardLanterns(delta);
   }
 
   /** House footprints within `radius` of a point (blast queries). */

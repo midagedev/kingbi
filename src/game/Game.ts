@@ -1374,16 +1374,16 @@ export class Game {
       const brute = type === 'brute';
       const tint = this.rng();
       const speed = (7.5 + this.rng() * 7) * (brute ? 0.55 : 1);
-      // 시체 색 = 살아있는 로브 팔레트(Horde.palette 삼베빛)의 죽음 톤 —
-      // same hemp family, dimmed a stop, so the fallen body reads as the
-      // same creature that was just standing there.
+      // 시체 색 = 로브 팔레트 × 그라임(살아있는 좀비는 직물 텍스처가 곱해져
+      // 훨씬 어둡다 — raw palette read WHITE at night). 한 단계 아래로.
+      const grime = 0.56;
       const robe = brute
-        ? [0.82, 0.8, 0.75]
+        ? [0.82 * grime, 0.8 * grime, 0.75 * grime]
         : type === 'runner'
-          ? [0.585 + tint * 0.04, 0.545 + tint * 0.04, 0.475 + tint * 0.04]
+          ? [0.585 * grime + tint * 0.03, 0.545 * grime + tint * 0.03, 0.475 * grime + tint * 0.03]
           : type === 'shield'
-            ? [0.53, 0.5, 0.455]
-            : [0.7 + tint * 0.06 + (elite ? 0.07 : 0), 0.665 + tint * 0.055 + (elite ? 0.06 : 0), 0.6 + tint * 0.055];
+            ? [0.53 * grime, 0.5 * grime, 0.455 * grime]
+            : [0.7 * grime + tint * 0.035 + (elite ? 0.05 : 0), 0.665 * grime + tint * 0.03, 0.6 * grime + tint * 0.03];
       this.rubble.spawnCorpse(
         position.x, gibY + 0.15, position.z,
         this.rng() * Math.PI * 2, brute ? 2.8 : type === 'runner' ? 0.72 : type === 'shield' ? 1.05 : 1,

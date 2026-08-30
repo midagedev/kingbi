@@ -111,7 +111,7 @@ export class Box3dWorld {
     this.corpseRowOf = new Int16Array(capacity).fill(-1);
 
     const corpseGeometry = buildCorpseGeometry();
-    const corpseMaterial = new THREE.MeshStandardMaterial({ roughness: 1, metalness: 0, envMapIntensity: 0.35 });
+    const corpseMaterial = new THREE.MeshStandardMaterial({ roughness: 1, metalness: 0, envMapIntensity: 0.18 });
     this.corpseMesh = new THREE.InstancedMesh(corpseGeometry, corpseMaterial, CORPSE_MAX);
     this.corpseMesh.frustumCulled = false;
     this.corpseMesh.receiveShadow = true;
