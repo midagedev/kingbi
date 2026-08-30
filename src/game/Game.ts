@@ -1025,16 +1025,26 @@ export class Game {
     this.audio.gatlingShot(this.spin, () => this.rng());
     this.heat += HEAT_PER_SHOT * this.heatMult;
 
+    // Vertical fan: bullets walk up the target (0.25-3.6m above the aim
+    // ground) so a hosed house erodes roof-to-base, not just a waist band.
+    const fanLen = Math.hypot(this.aimPoint.x - muzzle.x, this.aimPoint.z - muzzle.z) || 30;
+    const aimGroundY = this.world.queries().heightAt(this.aimPoint.x, this.aimPoint.z);
+    const targetY = aimGroundY + 0.25 + this.rng() * 3.4;
+    const shotSlope = (targetY - muzzle.y) / fanLen;
+
     const hit = this.horde.queryRay(
       muzzle.x, muzzle.z, dirX, dirZ, 160, AIM_ASSIST_RADIUS * this.assistMult, this.rayHits,
     );
+    const houseHit = this.world.houseHitTest(muzzle.x, muzzle.z, dirX, dirZ, 160);
     this.shotsFired += 1;
-    if (hit) this.shotsHit += 1;
+    if (hit && (!houseHit || this.rayHits[0].dist <= houseHit.dist)) {
+      this.shotsHit += 1;
+    }
     const shotForce = SHOT_FORCE * this.forceMult;
     let endX: number;
     let endZ: number;
     let endY: number;
-    if (hit) {
+    if (hit && (!houseHit || this.rayHits[0].dist <= houseHit.dist)) {
       const record = this.rayHits[0];
       endX = record.x;
       endZ = record.z;
@@ -1069,13 +1079,20 @@ export class Game {
           }, this.dmgPerShot);
         }
       }
+    } else if (houseHit) {
+      // 너덜너덜 — the bullet chews cubes out of the house where it lands.
+      endX = houseHit.x;
+      endZ = houseHit.z;
+      endY = muzzle.y + shotSlope * houseHit.dist;
+      this.shotsHit += 1;
+      this.chewHouse(houseHit.index, endX, endY, endZ, dirX, dirZ, 0.95 + (this.splash ? 0.55 : 0));
     } else {
       // Misses terminate inside the visible murk, not at the 160m logic cap,
       // so tracers read as short streaks instead of dying in fog.
       const missDist = 90 + this.rng() * 40;
       endX = muzzle.x + dirX * missDist;
       endZ = muzzle.z + dirZ * missDist;
-      endY = muzzle.y - 0.6;
+      endY = muzzle.y + shotSlope * missDist - 0.6;
     }
 
     this.tracers.spawnTracer(muzzle, this.tmpV2.set(endX, endY, endZ));
@@ -1113,6 +1130,70 @@ export class Game {
     this.slowmoTimer = 0.5;
     this.audio.drum(0.8);
   }
+
+  /** 한 오판 잎chew — bullets carve cubes out of a house; the debris pool
+   *  carries them away. Hits spark, crack and dust; the house erodes where
+   *  you aim. Past the structure threshold the whole thing pancakes. */
+  private chewHouse(index: number, x: number, y: number, z: number, dirX: number, dirZ: number, radius: number): void {
+    const vox = this.world.voxelHouseManager();
+    if (!vox || vox.isCollapsed(index)) return;
+    this.chewScratch.length = 0;
+    vox.chew(x, y, z, radius, this.chewScratch);
+    if (this.chewScratch.length > 0) {
+      this.debris?.burstVoxels(
+        this.chewScratch.slice(0, 7), dirX, dirZ, 2.6, () => this.rng(), 2.6,
+      );
+      this.vfx.hitSpark(x, y, z, dirX, dirZ, () => this.rng());
+      if (this.woodSfxTimer <= 0) {
+        this.woodSfxTimer = 0.07;
+        this.audio.armorClank();
+      }
+      if (this.rng() < 0.3) this.vfx.demolitionDust(x, y + 0.6, z, 2, () => this.rng());
+      this.shakeTrauma = Math.min(1, this.shakeTrauma + 0.015);
+    }
+    if (vox.aliveRatio(index) < 0.62) this.collapseHouse(index);
+  }
+
+  /** 구조 붕괴 — the remaining cubes pancake roof-first; the street loses
+   *  a building, the talisman drinks its due. */
+  private collapseHouse(index: number): void {
+    const vox = this.world.voxelHouseManager();
+    if (!vox || vox.isCollapsed(index)) return;
+    const center = vox.houseCenter(index);
+    vox.triggerCollapse(index, () => this.rng());
+    this.hud.stamp('崩', '집이 무너진다');
+    this.hud.showWave('한 채가 무너졌다 — 부적에 먹이 들었다');
+    this.shakeTrauma = Math.min(1, this.shakeTrauma + 0.5);
+    this.fovPunch = Math.min(1.4, this.fovPunch + 0.6);
+    this.world.impactAberration(1.4);
+    this.slowmoTimer = Math.max(this.slowmoTimer, 0.4);
+    this.audio.boom();
+    this.audio.drum(0.7);
+    this.audio.roar();
+    this.vfx.demolitionDust(center.x, center.y + 2, center.z, 22, () => this.rng());
+    this.debris?.chipBurst(center.x, center.y + 1, center.z, 0, 0, 22, () => this.rng());
+    this.sealCharge = Math.min(1, this.sealCharge + 0.2);
+    this.world.clearObstaclesNear(center.x, center.z, 12);
+  }
+
+  private dx01(v: number): number { return v / (Math.abs(v) + 1); }
+  private dz01(v: number): number { return v / (Math.abs(v) + 1); }
+
+  /** QA: chew/collapse by world point (test hooks + capture rigs). */
+  private debugChewAt(x: number, z: number, y: number, radius: number): number {
+    const indices = this.world.houseIndicesNear(x, z, 6);
+    if (indices.length === 0) return 0;
+    this.chewScratch.length = 0;
+    const removed = this.world.voxelHouseManager()?.chew(x, y, z, radius, this.chewScratch) ?? 0;
+    if (removed > 0) {
+      this.debris?.burstVoxels(this.chewScratch.slice(0, 14), 0, -1, 2.6, () => this.rng(), 2.6);
+    }
+    return removed;
+  }
+
+  private readonly chewScratch: Array<{ x: number; y: number; z: number; r: number; g: number; b: number }> = [];
+  private woodSfxTimer = 0;
+  private collapseDustTimer = 0;
 
   /** Kill-count drum beats — the shareable "how deep did you get" moments. */
   private static readonly KILL_MILESTONES: ReadonlyArray<{ at: number; text: string }> = [
@@ -1219,26 +1300,10 @@ export class Game {
       this.boomStampCooldown = 1.2;
       this.hud.stamp('爆', '유폭');
     }
-    // Demolition: hanok caught in the blast burst into mosaic chunks and
-    // their wreckage stops blocking the ground.
-    if (this.debris) {
-      const hits = this.world.obstaclesNear(x, z, 9);
-      for (const box of hits) {
-        this.debris.burstBuilding(
-          {
-            minX: box.min.x, maxX: box.max.x,
-            minZ: box.min.z, maxZ: box.max.z,
-            baseY: box.min.y, topY: box.max.y,
-          },
-          x, z, () => this.rng(),
-        );
-        this.world.hideProxiesNear((box.min.x + box.max.x) / 2, (box.min.z + box.max.z) / 2, 6);
-      }
-      if (hits.length > 0) {
-        this.world.clearObstaclesNear(x, z, 9);
-        this.debris.chipBurst(x, y, z, 0, 0, 10, () => this.rng());
-        this.vfx.demolitionDust(x, y + 1, z, 14, () => this.rng());
-      }
+    // Demolition: a blast near a house chews a huge bite out of it —
+    // usually enough to trip the structure threshold and pancake it.
+    for (const index of this.world.houseIndicesNear(x, z, 10)) {
+      this.chewHouse(index, x, y, z, this.dx01(x - this.bunkerX), this.dz01(z - this.bunkerZ), 4.2);
     }
     const dx = x - this.bunkerX;
     const dz = z - this.bunkerZ;
@@ -1345,6 +1410,13 @@ export class Game {
     this.clankSfxTimer -= delta;
     this.boomStampCooldown -= delta;
     this.sealStampLock -= delta;
+    this.woodSfxTimer -= delta;
+    this.collapseDustTimer -= delta;
+    this.world.updateVoxelHouses(delta, (x, y, z) => {
+      if (this.collapseDustTimer > 0) return;
+      this.collapseDustTimer = 0.18;
+      this.vfx.demolitionDust(x, y + 0.4, z, 3, () => this.rng());
+    });
     if (this.comboTimer > 0) {
       this.comboTimer -= delta;
       if (this.comboTimer <= 0) {
@@ -1450,6 +1522,7 @@ export class Game {
     this.vfx.reset();
     this.debris?.clear();
     this.bloodYard?.clear();
+    this.world.resetYardHouses();
     this.gunnerInstance?.reset();
     this.hud.setScore(0);
     this.hud.setBunker(this.bunkerHp, this.bunkerMax);
@@ -1667,6 +1740,26 @@ export class Game {
           );
           this.aimPoint.set(this.bunkerX, this.bunkerGroundY, this.bunkerZ - 9);
           this.fireSeal();
+        } else if (name === 'demolish') {
+          // Voxel demolition rig: house[0] chewed ragged by simulated hose
+          // bursts, house[1] just tripped its pancake — mid-air capture.
+          this.hideEndScreen();
+          if (this.mode !== 'playing') this.beginRun();
+          this.startWave(4);
+          this.waveActive = false;
+          this.waveSpawnQueue = 0;
+          this.horde.clearAll();
+          this.horde.spawnWave(26, -Math.PI / 2, 4, 0.12, 0.5, { bloater: 2, runner: 4 }, [16, 40], { x: this.bunkerX, z: this.bunkerZ });
+          const houses = this.world.yardHouses();
+          if (houses.length >= 2) {
+            for (let i = 0; i < 9; i += 1) {
+              const a = i * 0.7;
+              this.debugChewAt(houses[0].x + Math.cos(a) * 5, houses[0].z + Math.sin(a) * 4, 1 + (i % 4) * 1.4, 1.35);
+            }
+            this.debugChewAt(houses[1].x, houses[1].z, 2, 2.2);
+            const near = this.world.houseIndicesNear(houses[1].x, houses[1].z, 8);
+            if (near.length > 0) this.collapseHouse(near[0]);
+          }
         } else if (name === 'showcase') {
           this.hideEndScreen();
           if (this.mode !== 'playing') this.beginRun();
@@ -1721,6 +1814,14 @@ export class Game {
       fireSealAt: (x: number, z: number) => {
         this.aimPoint.set(x, this.bunkerGroundY, z);
         this.fireSeal();
+      },
+      /** Chew cubes out of the nearest house (voxel demolition QA). */
+      chewHouseAt: (x: number, z: number, y = 2, radius = 1.2) =>
+        this.debugChewAt(x, z, y, radius),
+      /** Force the structure collapse of the house nearest a point. */
+      collapseHouseAt: (x: number, z: number) => {
+        const indices = this.world.houseIndicesNear(x, z, 8);
+        if (indices.length > 0) this.collapseHouse(indices[0]);
       },
       /** Compose the 밤의 그림 card (painting QA) as a data URL. */
       paintingDataUrl: () => buildPaintingCard(this.bloodYard?.paintingCanvas ?? null, {

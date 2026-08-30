@@ -49,6 +49,10 @@ interface ThreeGameTestHooks {
   boomAt(x: number, z: number): void;
   /** Arm the talisman gauge (seal-shot QA): 0..1. */
   setSealCharge(value: number): void;
+  /** Chew cubes out of the nearest house (voxel demolition QA). */
+  chewHouseAt(x: number, z: number, y?: number, radius?: number): number;
+  /** Force the structure collapse of the house nearest a point. */
+  collapseHouseAt(x: number, z: number): void;
   /** Detonate the 부적 봉인 at a world point (sigil + purge QA). */
   fireSealAt(x: number, z: number): void;
   /** Compose the 밤의 그림 card as a PNG data URL (painting QA). */

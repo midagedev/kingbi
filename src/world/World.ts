@@ -1,6 +1,5 @@
 import * as THREE from 'three';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
-import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { createVillageAsync } from '@cheoma/api/village.js';
 import { buildBuilding, disposeBuilding, PRESETS } from '@cheoma/api/building.js';
 import {
@@ -16,6 +15,7 @@ import type {
 import type { CheomaVillageHandle } from '@cheoma/api/village.js';
 import { createNoirGradePass, setNoirGradeResolution, setAberration, updateNoirGradePass, type NoirGradePass } from './NoirGradePass';
 import { Atmosphere } from './Atmosphere';
+import { VoxelHouses, voxelizeGroup } from '../entities/VoxelHouses';
 import { createSeededRandom } from '../utils/random';
 
 export interface WorldBuildResult {
@@ -54,46 +54,6 @@ export interface WorldQueries {
   palaceCenter(): { x: number; z: number } | null;
 }
 
-function bakeBuildingDraws(source: THREE.Group): THREE.Group {
-  source.updateMatrixWorld(true);
-  const buckets = new Map<THREE.Material, THREE.BufferGeometry[]>();
-  source.traverse((object) => {
-    const mesh = object as THREE.Mesh;
-    if (!mesh.isMesh || !mesh.geometry) return;
-    const material = mesh.material as THREE.Material | THREE.Material[];
-    if (Array.isArray(material)) return; // multi-material parts stay rare here
-    // mergeGeometries 제약: 균질 인덱싱(toNonIndexed) + 동일 속성 셋트.
-    const geo = mesh.geometry.index ? mesh.geometry.toNonIndexed() : mesh.geometry.clone();
-    for (const name of Object.keys(geo.attributes)) {
-      if (name !== 'position' && name !== 'normal' && name !== 'uv') geo.deleteAttribute(name);
-    }
-    if (!geo.getAttribute('normal')) geo.computeVertexNormals();
-    if (!geo.getAttribute('uv')) {
-      geo.setAttribute(
-        'uv',
-        new THREE.BufferAttribute(new Float32Array(geo.getAttribute('position').count * 2), 2),
-      );
-    }
-    geo.applyMatrix4(mesh.matrixWorld);
-    const list = buckets.get(material);
-    if (list) list.push(geo);
-    else buckets.set(material, [geo]);
-  });
-  const group = new THREE.Group();
-  group.name = 'building-baked';
-  for (const [material, list] of buckets) {
-    const merged = mergeGeometries(list, false);
-    for (const geo of list) geo.dispose();
-    if (!merged) continue;
-    const mesh = new THREE.Mesh(merged, material);
-    // 받는 그림자만: the noir night crushes cast shadows to ink anyway,
-    // and 180+ extra shadow-caster draws for four small houses is a bad
-    // trade on the yard's light budget.
-    mesh.receiveShadow = true;
-    group.add(mesh);
-  }
-  return group;
-}
 
 /**
  * Wire the game onto the cheoma procedural Joseon village generator:
@@ -113,9 +73,10 @@ export class World {
   private noirPass: NoirGradePass | null = null;
   private atmosphere: Atmosphere | null = null;
   private obstacleBoxes: THREE.Box3[] = [];
-  /** The four destructible yard houses — baked to merged draws, one group
-   *  each so demolition can still hide them individually. */
-  private houses: Array<{ group: THREE.Group; box: THREE.Box3; source: THREE.Group }> = [];
+  /** The four destructible yard houses — rendered as chewable voxel cubes
+   *  (see VoxelHouses); the record here is the collision footprint. */
+  private houses: Array<{ x: number; z: number; box: THREE.Box3 }> = [];
+  private voxelHouses: VoxelHouses | null = null;
   private readonly rand = createSeededRandom(20260815);
   private disposed = false;
 
@@ -252,24 +213,26 @@ export class World {
   }
 
   private disposeYardHouses(): void {
-    for (const house of this.houses) {
-      house.group.removeFromParent();
-      for (const child of house.group.children) {
-        (child as THREE.Mesh).geometry?.dispose();
-      }
-      disposeBuilding(house.source);
-    }
+    this.voxelHouses?.dispose();
+    this.voxelHouses = null;
     this.obstacleBoxes = this.obstacleBoxes.filter((box) =>
       !this.houses.some((house) => house.box === box));
     this.houses = [];
   }
 
+  /** Run restart: all cubes back in place, footprints whole. */
+  resetYardHouses(): void {
+    this.voxelHouses?.reset();
+    this.obstacleBoxes = this.houses.map((house) => house.box.clone());
+  }
+
   /** The destructible yard houses flanking the firing lane — placed
    *  relative to the DEFENSE point (measured flat ground), never a fixed
    *  palace offset: the old fixed -78 put the gun on the 배산 slope and hid
-   *  the houses behind the ridge on half the seeds. Each house's ~120
-   *  builder meshes are baked into one merged draw per material (they never
-   *  animate) — visible houses must not cost 500 draw calls. */
+   *  the houses behind the ridge on half the seeds. Each finished builder
+   *  group is OFFLINE-voxelized into chewable cubes (one InstancedMesh for
+   *  the whole street — the gatling erodes them hole by hole; see
+   *  VoxelHouses). */
   placeYardHouses(cx: number, cz: number, seed: number): void {
     this.disposeYardHouses();
     const site = this.village?.plan.site;
@@ -286,10 +249,12 @@ export class World {
       { style: 'choga' as const, dx: -21, dz: -16, rot: 2.6 },
       { style: 'giwa' as const, dx: 21, dz: -18, rot: -2.6 },
     ];
-    // Shared palettes per style: same-material houses merge into the same
-    // draw buckets and the whole street costs ~2× the one-house material
-    // count instead of 4×.
+    // Compact runs a coarser grid — fewer cubes on a phone.
+    const size = this.compact ? 0.52 : 0.42;
+    const jitterRng = createSeededRandom((seed ^ 0x7ee1) >>> 0);
+    // Shared palettes per style (cheoma's own material sharing).
     const palettes = new Map<string, unknown>();
+    const results: Array<{ x: number; z: number; data: ReturnType<typeof voxelizeGroup> }> = [];
     for (const spec of specs) {
       const source = buildBuilding({
         ...PRESETS[spec.style],
@@ -299,22 +264,76 @@ export class World {
       palettes.set(spec.style, (source as unknown as { userData: { materials?: unknown } }).userData.materials);
       const x = cx + spec.dx;
       const z = cz + spec.dz;
-      const group = bakeBuildingDraws(source);
-      group.position.set(x, Number(site.heightAt?.(x, z) ?? 0), z);
-      group.rotation.y = spec.rot;
-      this.scene.add(group);
-      const box = new THREE.Box3().setFromObject(group);
-      this.houses.push({ group, box, source });
-      this.obstacleBoxes.push(box.clone());
+      source.position.set(x, Number(site.heightAt?.(x, z) ?? 0), z);
+      source.rotation.y = spec.rot;
+      const data = voxelizeGroup(source, size, jitterRng);
+      results.push({ x, z, data });
+      disposeBuilding(source);
+    }
+    const total = results.reduce((sum, r) => sum + (r.data ? r.data.sx.length : 0), 0);
+    if (total === 0) return;
+    this.voxelHouses = new VoxelHouses(this.scene, total);
+    for (const result of results) {
+      if (!result.data) continue;
+      const index = this.voxelHouses.addHouse(result.data, size);
+      if (index < 0) break;
+      this.houses.push({ x: result.x, z: result.z, box: result.data.box });
+      this.obstacleBoxes.push(result.data.box.clone());
     }
   }
 
+  voxelHouseManager(): VoxelHouses | null {
+    return this.voxelHouses;
+  }
+
+  /** Collapse tick — drives the pancake animation, dusts landings. */
+  updateVoxelHouses(delta: number, onLand: (x: number, y: number, z: number) => void): void {
+    this.voxelHouses?.update(delta, onLand);
+  }
+
+  /** House footprints within `radius` of a point (blast queries). */
+  houseIndicesNear(x: number, z: number, radius: number): number[] {
+    const rSq = radius * radius;
+    const out: number[] = [];
+    this.houses.forEach((house, index) => {
+      if (this.voxelHouses?.isCollapsed(index)) return;
+      const cx = Math.max(house.box.min.x, Math.min(x, house.box.max.x));
+      const cz = Math.max(house.box.min.z, Math.min(z, house.box.max.z));
+      const dx = cx - x;
+      const dz = cz - z;
+      if (dx * dx + dz * dz <= rSq) out.push(index);
+    });
+    return out;
+  }
+
+  /** 2D ray vs house footprints — the gatling's chew target. */
+  houseHitTest(ox: number, oz: number, dx: number, dz: number, maxDist: number): { index: number; dist: number; x: number; z: number } | null {
+    let best: { index: number; dist: number; x: number; z: number } | null = null;
+    this.houses.forEach((house, index) => {
+      if (this.voxelHouses?.isCollapsed(index)) return;
+      const box = house.box;
+      const tx1 = (box.min.x - ox) / dx;
+      const tx2 = (box.max.x - ox) / dx;
+      const tz1 = (box.min.z - oz) / dz;
+      const tz2 = (box.max.z - oz) / dz;
+      const tmin = Math.max(Math.min(tx1, tx2), Math.min(tz1, tz2));
+      const tmax = Math.min(Math.max(tx1, tx2), Math.max(tz1, tz2));
+      if (tmax < Math.max(tmin, 0.5) || tmin > maxDist) return;
+      const t = Math.max(tmin, 0.5);
+      if (!best || t < best.dist) {
+        best = { index, dist: t, x: ox + dx * t, z: oz + dz * t };
+      }
+    });
+    return best;
+  }
+
   /** Stage probe: where the yard houses actually landed (QA/vision rigs). */
-  yardHouses(): Array<{ x: number; z: number; visible: boolean }> {
-    return this.houses.map((house) => ({
-      x: +house.group.position.x.toFixed(1),
-      z: +house.group.position.z.toFixed(1),
-      visible: house.group.visible,
+  yardHouses(): Array<{ x: number; z: number; visible: boolean; alive: number }> {
+    return this.houses.map((house, index) => ({
+      x: +house.x.toFixed(1),
+      z: +house.z.toFixed(1),
+      visible: !this.voxelHouses?.isCollapsed(index),
+      alive: this.voxelHouses ? +this.voxelHouses.aliveRatio(index).toFixed(2) : 1,
     }));
   }
 
@@ -460,13 +479,6 @@ export class World {
       const dx = c.x - x;
       const dz = c.z - z;
       if (dx * dx + dz * dz <= rSq) proxy.mesh.visible = false;
-    }
-    // Yard houses are ours alone — always safe to hide.
-    for (const house of this.houses) {
-      const c = house.box.getCenter(new THREE.Vector3());
-      const dx = c.x - x;
-      const dz = c.z - z;
-      if (dx * dx + dz * dz <= rSq) house.group.visible = false;
     }
   }
 

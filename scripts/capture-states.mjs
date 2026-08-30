@@ -13,6 +13,7 @@ const CAPTURES = [
   { name: 'style-desktop', state: 'showcase', settle: 4500, holdFire: 1200, stamp: true },
   { name: 'tide-desktop', state: 'tide', settle: 8000, holdFire: 2000 },
   { name: 'seal-desktop', state: 'seal', settle: 900 },
+  { name: 'demolish-desktop', state: 'demolish', settle: 650 },
   { name: 'armed-desktop', state: 'active-play', settle: 16000, armSeal: true },
   { name: 'dawn-desktop', state: 'dawn', settle: 2500 },
   { name: 'dead-desktop', state: 'dead', settle: 1500 },

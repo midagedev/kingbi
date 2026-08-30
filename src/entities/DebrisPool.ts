@@ -1,4 +1,6 @@
 import * as THREE from 'three';
+
+const SCRATCH = new THREE.Color();
 import type { WorldQueries } from '../world/World';
 
 interface Chunk {
@@ -95,6 +97,29 @@ export class DebrisPool {
             impactX, impactZ, 1, rng, tint, 7 + rng() * 4, stride * (0.62 + rng() * 0.5));
         }
       }
+    }
+  }
+
+  /** Chewed house cubes ride the ballistic sim — one chunk per voxel in
+   *  the voxel's own color, short-lived so sustained hosing stays inside
+   *  the pool budget. */
+  burstVoxels(
+    voxels: Array<{ x: number; y: number; z: number; r: number; g: number; b: number }>,
+    dirX: number,
+    dirZ: number,
+    power: number,
+    rng: () => number,
+    life: number,
+  ): void {
+    for (const voxel of voxels) {
+      this.spawn(
+        voxel.x, voxel.y, voxel.z,
+        voxel.x - dirX * 4, voxel.z - dirZ * 4,
+        power * (0.7 + rng() * 0.7), rng,
+        SCRATCH.setRGB(voxel.r, voxel.g, voxel.b),
+        life * (0.6 + rng() * 0.7),
+        0.36 + rng() * 0.22,
+      );
     }
   }
 
