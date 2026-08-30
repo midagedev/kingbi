@@ -61,7 +61,13 @@ export function voxelizeGroup(
   group: THREE.Group,
   size: number,
   jitter: () => number,
-  region?: { cx: number; cz: number; rx: number; rz: number; yMax?: number },
+  region?: {
+    cx: number; cz: number; rx: number; rz: number; yMax?: number;
+    /** Skip triangles inside this box (street band carves around the palace). */
+    exclude?: { cx: number; cz: number; rx: number; rz: number };
+    /** Extra per-mesh gate (house-sized meshes only — mountain slabs stay). */
+    meshFilter?: (footprintX: number, footprintZ: number, bbMaxWorldY: number) => boolean;
+  },
 ): {
   sx: Float32Array; sy: Float32Array; sz: Float32Array;
   sr: Float32Array; sg: Float32Array; sb: Float32Array;
@@ -91,6 +97,16 @@ export function voxelizeGroup(
       const pos = mesh.geometry.attributes.position;
       const uvAttr = mesh.geometry.attributes.uv;
       if (!pos) return;
+      if (region?.meshFilter) {
+        if (!mesh.geometry.boundingBox) mesh.geometry.computeBoundingBox();
+        const bb = mesh.geometry.boundingBox;
+        if (!bb) return;
+        const mxw = mesh.matrixWorld.elements;
+        const footprintX = bb.max.x - bb.min.x;
+        const footprintZ = bb.max.z - bb.min.z;
+        const maxY = bb.max.y + mxw[13];
+        if (!region.meshFilter(footprintX, footprintZ, maxY)) return;
+      }
       const index = mesh.geometry.index;
       const faces = (index ? index.count : pos.count) / 3;
       for (let f = 0; f < faces; f += 1) {
@@ -104,6 +120,9 @@ export function voxelizeGroup(
         const my = (a.y + b.y + c.y) / 3;
         if (region && (Math.abs(mx - region.cx) > region.rx || Math.abs(mz - region.cz) > region.rz)) continue;
         if (region?.yMax !== undefined && my > region.yMax) continue;
+        if (region?.exclude
+          && Math.abs(mx - region.exclude.cx) <= region.exclude.rx
+          && Math.abs(mz - region.exclude.cz) <= region.exclude.rz) continue;
         if (!Number.isFinite(a.x + a.y + a.z + b.x + b.y + b.z + c.x + c.y + c.z)) continue;
         kept.push(a.x, a.y, a.z, b.x, b.y, b.z, c.x, c.y, c.z);
         keptMat.push(material);
@@ -257,6 +276,75 @@ export function voxelizeGroup(
     }
   }
   return { sx, sy, sz, sr, sg, sb, box };
+}
+
+/** Split a street-band voxelize into per-building houses: XZ buckets of
+ *  `gap` meters, flood-filled across neighbors — each cluster becomes its
+ *  own chewable/collapsible house instead of one collective pancake. */
+export function splitStreetData(
+  data: { sx: Float32Array; sy: Float32Array; sz: Float32Array; sr: Float32Array; sg: Float32Array; sb: Float32Array },
+  gap: number,
+  minCells: number,
+): Array<{ sx: Float32Array; sy: Float32Array; sz: Float32Array; sr: Float32Array; sg: Float32Array; sb: Float32Array; box: THREE.Box3 }> {
+  const n = data.sx.length;
+  const buckets = new Map<string, number[]>();
+  for (let i = 0; i < n; i += 1) {
+    const key = `${Math.floor(data.sx[i] / gap)},${Math.floor(data.sz[i] / gap)}`;
+    let list = buckets.get(key);
+    if (!list) {
+      list = [];
+      buckets.set(key, list);
+    }
+    list.push(i);
+  }
+  const seen = new Set<string>();
+  const out: Array<{ sx: Float32Array; sy: Float32Array; sz: Float32Array; sr: Float32Array; sg: Float32Array; sb: Float32Array; box: THREE.Box3 }> = [];
+  for (const key of buckets.keys()) {
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const queue = [key];
+    const cells: number[] = [];
+    while (queue.length > 0) {
+      const cur = queue.pop()!;
+      cells.push(...buckets.get(cur)!);
+      const [bxs, bzs] = cur.split(',');
+      const bx = Number(bxs);
+      const bz = Number(bzs);
+      for (let dx = -1; dx <= 1; dx += 1) {
+        for (let dz = -1; dz <= 1; dz += 1) {
+          const next = `${bx + dx},${bz + dz}`;
+          if (seen.has(next) || !buckets.has(next)) continue;
+          seen.add(next);
+          queue.push(next);
+        }
+      }
+    }
+    if (cells.length < minCells) continue;
+    const sx = new Float32Array(cells.length);
+    const sy = new Float32Array(cells.length);
+    const sz = new Float32Array(cells.length);
+    const sr = new Float32Array(cells.length);
+    const sg = new Float32Array(cells.length);
+    const sb = new Float32Array(cells.length);
+    const box = new THREE.Box3();
+    for (let w = 0; w < cells.length; w += 1) {
+      const i = cells[w];
+      sx[w] = data.sx[i];
+      sy[w] = data.sy[i];
+      sz[w] = data.sz[i];
+      sr[w] = data.sr[i];
+      sg[w] = data.sg[i];
+      sb[w] = data.sb[i];
+      box.min.x = Math.min(box.min.x, data.sx[i]);
+      box.min.y = Math.min(box.min.y, data.sy[i]);
+      box.min.z = Math.min(box.min.z, data.sz[i]);
+      box.max.x = Math.max(box.max.x, data.sx[i]);
+      box.max.y = Math.max(box.max.y, data.sy[i]);
+      box.max.z = Math.max(box.max.z, data.sz[i]);
+    }
+    out.push({ sx, sy, sz, sr, sg, sb, box });
+  }
+  return out;
 }
 
 export class VoxelHouses {
@@ -546,10 +634,10 @@ export class VoxelHouses {
     return taken;
   }
 
-  /** Rubble body half-size for this house's cube scale. */
+  /** Rubble body half-size for this house's cube scale (chunk = cell). */
   halfSize(index: number): number {
     const house = this.houses[index];
-    return (house ? house.size : 0.4) * 0.58;
+    return (house ? house.size : 0.4) * 0.5;
   }
 
   aliveRatio(index: number): number {

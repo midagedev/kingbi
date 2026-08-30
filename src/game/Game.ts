@@ -1155,23 +1155,26 @@ export class Game {
     const vox = this.world.voxelHouseManager();
     if (!vox || vox.isCollapsed(index)) return;
     this.chewScratch.length = 0;
+    // 관통 — the gatling doesn't stop at the entry skin: the round punches
+    // through the house, chewing a tunnel (old thatch is weak; the gun is
+    // not). Deeper bites run a slightly smaller radius.
     vox.chew(x, y, z, radius, this.chewScratch);
+    vox.chew(x + dirX * 2.4, y, z + dirZ * 2.4, radius * 0.78, this.chewScratch);
+    vox.chew(x + dirX * 4.8, y, z + dirZ * 4.8, radius * 0.78, this.chewScratch);
     if (this.chewScratch.length > 0) {
-      // box3d 강체 — the crater erupts: up to 34 real chunks strided across
-      // the whole blast sphere (not just its floor), the odd giant chunk for
-      // weight. 실제 탄보다 넓게 — the house leaves in handfuls.
+      // box3d 강체 — the crater erupts: real chunks at CELL size (never
+      // bigger — debris larger than the wall it came from reads fake),
+      // strided across the whole blast so the tunnel walls fly together.
       const half = vox.halfSize(index);
-      const budget = Math.min(34, this.chewScratch.length);
+      const budget = Math.min(46, this.chewScratch.length);
       const stride = Math.max(1, Math.floor(this.chewScratch.length / budget));
       let spawned = 0;
       for (let i = 0; i < this.chewScratch.length && spawned < budget; i += stride) {
         const cube = this.chewScratch[i];
-        const big = this.rng() < 0.14;
-        const chunkHalf = half * (big ? 2.4 : 0.85 + this.rng() * 1.1);
         this.rubble?.spawnRubble(
-          cube.x, cube.y, cube.z, chunkHalf, cube.r, cube.g, cube.b,
+          cube.x, cube.y, cube.z, half * (0.72 + this.rng() * 0.26), cube.r, cube.g, cube.b,
           dirX * (9 + this.rng() * 10) + (this.rng() - 0.5) * 6,
-          3.5 + this.rng() * 7 + (big ? 2.5 : 0),
+          3.5 + this.rng() * 7,
           dirZ * (9 + this.rng() * 10) + (this.rng() - 0.5) * 6,
           (this.rng() - 0.5) * 16, (this.rng() - 0.5) * 16, (this.rng() - 0.5) * 16,
         );

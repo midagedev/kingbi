@@ -15,7 +15,7 @@ import type {
 import type { CheomaVillageHandle } from '@cheoma/api/village.js';
 import { createNoirGradePass, setNoirGradeResolution, setAberration, updateNoirGradePass, type NoirGradePass } from './NoirGradePass';
 import { Atmosphere } from './Atmosphere';
-import { VoxelHouses, voxelizeGroup } from '../entities/VoxelHouses';
+import { VoxelHouses, voxelizeGroup, splitStreetData } from '../entities/VoxelHouses';
 import { createSeededRandom } from '../utils/random';
 
 export interface WorldBuildResult {
@@ -250,17 +250,14 @@ export class World {
     this.disposeYardHouses();
     const site = this.village?.plan.site;
     if (!site) return;
-    // A WIDE street for the single portrait composition: a 3-bay giwa is
-    // 14-17m across (podium + eaves), so near pairs stand at ±19 (inner
-    // wall ≥11m out — inside the portrait lens edge, OUT of the lane),
-    // far pairs at ±21. Near pairs face the lane dead-on (rot 0 — no
-    // corner swing into the sightline); the far pair's half-diagonal
-    // (~12m) still clears the lane by 2m+.
+    // Material progression down the lane — 개틀링 → 초가집(약함, 근거리)
+    // → 기와집(강함, 원거리) → 궁(보스 배경). Near pairs face the lane
+    // dead-on; the far pair's half-diagonal still clears the firing line.
     const specs = [
-      { style: 'giwa' as const, dx: -19, dz: -10, rot: 0 },
-      { style: 'choga' as const, dx: 19, dz: -12, rot: 0 },
-      { style: 'choga' as const, dx: -21, dz: -16, rot: 2.6 },
-      { style: 'giwa' as const, dx: 21, dz: -18, rot: -2.6 },
+      { style: 'choga' as const, dx: -20, dz: -13, rot: 0 },
+      { style: 'choga' as const, dx: 21, dz: -14, rot: 0 },
+      { style: 'giwa' as const, dx: -23, dz: -19, rot: 2.6 },
+      { style: 'giwa' as const, dx: 23, dz: -20, rot: -2.6 },
     ];
     // Chunky house cubes — debris reads at 27m camera height (0.18 made the
     // blasts look like dust); the distant palace still runs coarse.
@@ -290,6 +287,7 @@ export class World {
     // apart from the gun line, and it pancakes like everything else.
     this.palaceVoxelIndex = -1;
     let palaceData: ReturnType<typeof voxelizeGroup> = null;
+    let streetDatas: ReturnType<typeof splitStreetData> = [];
     const villageRoot = this.scene.children.find((child) => (child.name ?? '').startsWith('village'));
     if (villageRoot) {
       // The village group spans the whole mountain (582m) — filter to the
@@ -316,9 +314,49 @@ export class World {
           if (withinX && withinZ && belowY) mesh.visible = false;
         });
       }
+
+      // 초가집 거리 — the village's own thatch rows between the 기와 pair
+      // and the palace join the chewable street. TWO SIDE STRIPS: the center
+      // corridor stays mesh-only so the firing lane never gets a bullet
+      // sponge. Only HOUSE-SIZED meshes voxelize and go dark (mountain
+      // slabs stay meshes); palace grounds excluded; clustered per building.
+      const streetGroundY = Number(site.heightAt?.(cx, cz - 53) ?? 5);
+      let streetCubes = 0;
+      for (const side of [-1, 1]) {
+        const strip = {
+          cx: cx + side * 24, cz: cz - 53, rx: 18, rz: 23, yMax: streetGroundY + 10,
+          exclude: { cx, cz: cz - 110, rx: 62, rz: 46 },
+          meshFilter: (footprintX: number, footprintZ: number, maxY: number) =>
+            footprintX <= 45 && footprintZ <= 45 && maxY <= streetGroundY + 10,
+        };
+        const stripRaw = voxelizeGroup(villageRoot as THREE.Group, size, jitterRng, strip);
+        if (!stripRaw) continue;
+        streetCubes += stripRaw.sx.length;
+        villageRoot.traverse((object) => {
+          const mesh = object as THREE.Mesh;
+          if (!mesh.isMesh || !mesh.geometry) return;
+          if (!mesh.geometry.boundingBox) mesh.geometry.computeBoundingBox();
+          const bb = mesh.geometry.boundingBox;
+          if (!bb) return;
+          const mxw = mesh.matrixWorld.elements;
+          const minX = bb.min.x + mxw[12];
+          const maxX = bb.max.x + mxw[12];
+          const minZ = bb.min.z + mxw[14];
+          const maxZ = bb.max.z + mxw[14];
+          const maxY = bb.max.y + mxw[13];
+          const inside = minX >= strip.cx - strip.rx && maxX <= strip.cx + strip.rx
+            && minZ >= strip.cz - strip.rz && maxZ <= strip.cz + strip.rz;
+          if (inside && maxX - minX <= 45 && maxZ - minZ <= 45 && maxY <= streetGroundY + 10) {
+            mesh.visible = false;
+          }
+        });
+        streetDatas.push(...splitStreetData(stripRaw, 1.6, 350));
+      }
+      console.info('[street-voxelize]', `buildings=${streetDatas.length} cubes=${streetCubes}`);
     }
     const total =
       results.reduce((sum, r) => sum + (r.data ? r.data.sx.length : 0), 0) +
+      streetDatas.reduce((sum, d) => sum + d.sx.length, 0) +
       (palaceData ? palaceData.sx.length : 0);
     if (total === 0) return;
     this.voxelHouses = new VoxelHouses(this.scene, total);
@@ -328,6 +366,17 @@ export class World {
       if (index < 0) break;
       this.houses.push({ x: result.x, z: result.z, box: result.data.box });
       this.obstacleBoxes.push(result.data.box.clone());
+    }
+    for (const data of streetDatas) {
+      const index = this.voxelHouses.addHouse(data, size);
+      if (index < 0) break;
+      // Hit-testable but NOT zombie obstacles — the north lane stays open
+      // (the palace already follows this rule).
+      this.houses.push({
+        x: (data.box.min.x + data.box.max.x) / 2,
+        z: (data.box.min.z + data.box.max.z) / 2,
+        box: data.box.clone(),
+      });
     }
     if (palaceData) {
       const index = this.voxelHouses.addHouse(palaceData, palaceSize);
@@ -378,6 +427,23 @@ export class World {
         out.push({
           array: false, groups: 0, indexed: true,
           box: `${sx.toFixed(0)}x${sy.toFixed(0)}x${sz.toFixed(0)}m meshes=${meshes} poisoned=${poisoned} cells@0.38=${(cells(0.38) / 1e6).toFixed(1)}M @0.5=${(cells(0.5) / 1e6).toFixed(1)}M @0.8=${(cells(0.8) / 1e6).toFixed(1)}M`,
+        });
+        // Per-mesh footprints (the street-band hide safety probe: house-sized
+        // meshes can be hidden per building; mountain slabs must not).
+        const rootObj = root;
+        rootObj.traverse((object) => {
+          const mesh = object as THREE.Mesh;
+          if (!mesh.isMesh || !mesh.geometry) return;
+          if (!mesh.geometry.boundingBox) mesh.geometry.computeBoundingBox();
+          const bb = mesh.geometry.boundingBox;
+          if (!bb) return;
+          const w = bb.max.x - bb.min.x;
+          const d = bb.max.z - bb.min.z;
+          if (w > 45 || d > 45) return;
+          out.push({
+            array: mesh.visible, groups: 0, indexed: true,
+            box: `${(w).toFixed(1)}x${(bb.max.y - bb.min.y).toFixed(1)}x${(d).toFixed(1)} @${(bb.min.x + mesh.matrixWorld.elements[12]).toFixed(0)},${(bb.min.y + mesh.matrixWorld.elements[13]).toFixed(0)},${(bb.min.z + mesh.matrixWorld.elements[14]).toFixed(0)}`,
+          });
         });
       } else {
         out.push({ array: false, groups: 0, indexed: true, box: 'all-poisoned' });
