@@ -53,6 +53,11 @@ const CORPSE_HX = 0.56;
 const CORPSE_HY = 0.17;
 const CORPSE_HZ = 0.3;
 const CORPSE_MAX = 768;
+/** Rubble renders inset from its physics hull: resting cubes touch with
+ *  EXACTLY coplanar faces and z-fight into one flickering blob — a 14%
+ *  visual gap keeps every chunk individually readable (and reads ≤ the
+ *  wall cell it came from). Physics stays full-size for stable piles. */
+const RUBBLE_VISUAL = 0.86;
 
 /** Lying 원귀 measured to match the standing one: thin legs, coat-spread
  *  torso, horned head, arms slack at the sides — merged non-indexed (the
@@ -208,7 +213,8 @@ export class Box3dWorld {
   ): void {
     const slot = this.addBody(x, y, z, half, half, half, 0, vx, vy, vz, avx, avy, avz, this.rubbleOrder);
     if (slot < 0) return;
-    this.register(slot, 0, half * 2, half * 2, half * 2, r, g, b, this.mesh, slot);
+    const edge = half * 2;
+    this.register(slot, 0, edge * RUBBLE_VISUAL, edge * RUBBLE_VISUAL, edge * RUBBLE_VISUAL, r, g, b, this.mesh, slot);
     if (this.rubbleOrder.length < this.slots.length) this.rubbleOrder.push(slot);
   }
 

@@ -54,6 +54,9 @@ export interface ChewedVoxel {
   r: number;
   g: number;
   b: number;
+  /** The cell's own house scale — debris must match ITS voxel, not the
+   *  entry house's (mixed-size blasts used to spit oversized chunks). */
+  s: number;
 }
 
 /** Splat a placed group's triangles into surface voxels (build-time only). */
@@ -598,7 +601,7 @@ export class VoxelHouses {
         house.alive -= 1;
         this.killSlot(house.slots[i]);
         this.killGlowCell(house, i);
-        out.push({ x: house.sx[i], y: house.sy[i], z: house.sz[i], r: house.sr[i], g: house.sg[i], b: house.sb[i] });
+        out.push({ x: house.sx[i], y: house.sy[i], z: house.sz[i], r: house.sr[i], g: house.sg[i], b: house.sb[i], s: house.size });
         removed += 1;
       }
     }
@@ -627,7 +630,7 @@ export class VoxelHouses {
       house.alive -= 1;
       this.killSlot(house.slots[i]);
       this.killGlowCell(house, i);
-      out.push({ x: house.sx[i], y: house.sy[i], z: house.sz[i], r: house.sr[i], g: house.sg[i], b: house.sb[i] });
+      out.push({ x: house.sx[i], y: house.sy[i], z: house.sz[i], r: house.sr[i], g: house.sg[i], b: house.sb[i], s: house.size });
       taken += 1;
     }
     if (taken > 0) this.flush();

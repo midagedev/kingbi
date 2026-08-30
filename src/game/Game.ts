@@ -1172,13 +1172,17 @@ export class Game {
     vox.chew(x, y, z, radius, this.chewScratch);
     let burst = Math.min(14, this.chewScratch.length);
     if (this.chewScratch.length > 0) {
-      const half = vox.halfSize(index);
       const stride = Math.max(1, Math.floor(this.chewScratch.length / burst));
       for (let i = 0; i < this.chewScratch.length && burst > 0; i += stride) {
         const cube = this.chewScratch[i];
         burst -= 1;
+        // Chunk = ITS OWN cell's scale (a blast can cross voxel LODs) and
+        // never bigger; spawn jitter keeps full-size neighbors from birthing
+        // coplanar (z-fight blobs) before the solver separates them.
+        const chunkHalf = cube.s * 0.5 * (0.6 + this.rng() * 0.2);
         this.rubble?.spawnRubble(
-          cube.x, cube.y, cube.z, half * (0.6 + this.rng() * 0.2), cube.r, cube.g, cube.b,
+          cube.x + (this.rng() - 0.5) * cube.s * 0.5, cube.y, cube.z + (this.rng() - 0.5) * cube.s * 0.5,
+          chunkHalf, cube.r, cube.g, cube.b,
           dirX * (5.5 + this.rng() * 5) + (this.rng() - 0.5) * 8,
           2.5 + this.rng() * 3.5,
           dirZ * (5.5 + this.rng() * 5) + (this.rng() - 0.5) * 8,
@@ -1195,15 +1199,16 @@ export class Game {
     if (this.chewScratch.length > 0) {
       // box3d 강체 — chunks at CELL size (never bigger: debris larger than
       // the wall it came from reads fake), strided across the whole tunnel.
-      const half = vox.halfSize(index);
       const budget = Math.min(34, this.chewScratch.length);
       const stride = Math.max(1, Math.floor(this.chewScratch.length / budget));
       let spawned = 0;
       for (let i = 0; i < this.chewScratch.length && spawned < budget; i += stride) {
         const cube = this.chewScratch[i];
         spawned += 1;
+        const chunkHalf = cube.s * 0.5 * (0.6 + this.rng() * 0.2);
         this.rubble?.spawnRubble(
-          cube.x, cube.y, cube.z, half * (0.6 + this.rng() * 0.2), cube.r, cube.g, cube.b,
+          cube.x + (this.rng() - 0.5) * cube.s * 0.5, cube.y, cube.z + (this.rng() - 0.5) * cube.s * 0.5,
+          chunkHalf, cube.r, cube.g, cube.b,
           dirX * (13 + this.rng() * 12) + (this.rng() - 0.5) * 6,
           1 + this.rng() * 3,
           dirZ * (13 + this.rng() * 12) + (this.rng() - 0.5) * 6,
@@ -1234,13 +1239,13 @@ export class Game {
     this.chewScratch.length = 0;
     const taken = vox.takeVoxels(index, isPalace ? 380 : 300, this.chewScratch);
     if (taken > 0 && this.rubble) {
-      const half = vox.halfSize(index);
       for (const cube of this.chewScratch) {
         const dx = cube.x - center.x;
         const dz = cube.z - center.z;
         const len = Math.hypot(dx, dz) || 1;
         this.rubble.spawnRubble(
-          cube.x, cube.y, cube.z, half, cube.r, cube.g, cube.b,
+          cube.x + (this.rng() - 0.5) * cube.s * 0.5, cube.y, cube.z + (this.rng() - 0.5) * cube.s * 0.5,
+          cube.s * 0.5, cube.r, cube.g, cube.b,
           (dx / len) * (2.0 + this.rng() * 4.5),
           0.5 + this.rng() * 5.5,
           (dz / len) * (2.0 + this.rng() * 4.5),
@@ -1276,7 +1281,7 @@ export class Game {
     return Math.round((before - after) * 1000);
   }
 
-  private readonly chewScratch: Array<{ x: number; y: number; z: number; r: number; g: number; b: number }> = [];
+  private readonly chewScratch: Array<{ x: number; y: number; z: number; r: number; g: number; b: number; s: number }> = [];
   private woodSfxTimer = 0;
   /** Rolling box3d update cost (ms) — the physics budget probe. */
   private physMs = 0;
@@ -1369,12 +1374,20 @@ export class Game {
       const brute = type === 'brute';
       const tint = this.rng();
       const speed = (7.5 + this.rng() * 7) * (brute ? 0.55 : 1);
-      // 달빛 로브 — moonlit pale (near-black vanished into the night ground:
-      // corpses must READ from the 27m rig or the pile doesn't exist).
+      // 시체 색 = 살아있는 로브 팔레트(Horde.palette 삼베빛)의 죽음 톤 —
+      // same hemp family, dimmed a stop, so the fallen body reads as the
+      // same creature that was just standing there.
+      const robe = brute
+        ? [0.82, 0.8, 0.75]
+        : type === 'runner'
+          ? [0.585 + tint * 0.04, 0.545 + tint * 0.04, 0.475 + tint * 0.04]
+          : type === 'shield'
+            ? [0.53, 0.5, 0.455]
+            : [0.7 + tint * 0.06 + (elite ? 0.07 : 0), 0.665 + tint * 0.055 + (elite ? 0.06 : 0), 0.6 + tint * 0.055];
       this.rubble.spawnCorpse(
         position.x, gibY + 0.15, position.z,
         this.rng() * Math.PI * 2, brute ? 2.8 : type === 'runner' ? 0.72 : type === 'shield' ? 1.05 : 1,
-        0.34 + tint * 0.14 + (elite ? 0.07 : 0), 0.33 + tint * 0.12, 0.4 + (1 - tint) * 0.1,
+        robe[0], robe[1], robe[2],
         dirX * speed, 4.5 + this.rng() * 4, dirZ * speed,
         (this.rng() - 0.5) * 10, (this.rng() - 0.5) * 8, (this.rng() - 0.5) * 10,
       );
