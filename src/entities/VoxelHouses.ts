@@ -68,9 +68,9 @@ export function voxelizeGroup(
   const nx = Math.max(1, Math.ceil((box.max.x - box.min.x) / size));
   const ny = Math.max(1, Math.ceil((box.max.y - box.min.y) / size));
   const nz = Math.max(1, Math.ceil((box.max.z - box.min.z) / size));
-  if (nx * ny * nz > 262144) return null;
+  if (nx * ny * nz > 2621440) return null;
 
-  const colors = new Float32Array(nx * ny * nz * 3);
+  const colors = new Uint8Array(nx * ny * nz * 3);
   const occupied = new Uint8Array(nx * ny * nz);
   const tri = new THREE.Triangle();
   const cp = new THREE.Vector3();
@@ -166,9 +166,9 @@ export function voxelizeGroup(
             if (probe.distanceToSquared(cp) > reachSq) continue;
             const cell = ix + iy * nx + iz * nx * ny;
             occupied[cell] = 1;
-            colors[cell * 3] = color.r;
-            colors[cell * 3 + 1] = color.g;
-            colors[cell * 3 + 2] = color.b;
+            colors[cell * 3] = Math.min(255, Math.round(color.r * 255));
+            colors[cell * 3 + 1] = Math.min(255, Math.round(color.g * 255));
+            colors[cell * 3 + 2] = Math.min(255, Math.round(color.b * 255));
           }
         }
       }
@@ -193,9 +193,9 @@ export function voxelizeGroup(
         sx[w] = box.min.x + (ix + 0.5) * size + (jitter() - 0.5) * size * 0.14;
         sy[w] = box.min.y + (iy + 0.5) * size;
         sz[w] = box.min.z + (iz + 0.5) * size + (jitter() - 0.5) * size * 0.14;
-        sr[w] = colors[cell * 3];
-        sg[w] = colors[cell * 3 + 1];
-        sb[w] = colors[cell * 3 + 2];
+        sr[w] = colors[cell * 3] / 255;
+        sg[w] = colors[cell * 3 + 1] / 255;
+        sb[w] = colors[cell * 3 + 2] / 255;
         w += 1;
       }
     }
@@ -316,6 +316,39 @@ export class VoxelHouses {
     }
     if (removed > 0) this.flush();
     return removed;
+  }
+
+  /** Pull up to `max` alive voxels out of the structure (collapse → real
+   *  box3d bodies). Stride spreads the take over the whole house so the
+   *  body cloud reads as the building coming apart, not one corner. */
+  takeVoxels(index: number, max: number, out: ChewedVoxel[]): number {
+    const house = this.houses[index];
+    if (!house || house.collapsed) return 0;
+    const stride = Math.max(1, Math.floor(house.alive / Math.max(1, max)));
+    let taken = 0;
+    let seen = 0;
+    for (let i = 0; i < house.count && taken < max; i += 1) {
+      const cell = this.cellOf(house, house.sx[i], house.sy[i], house.sz[i]);
+      if (house.cellSlot[cell] !== i + 1) continue;
+      if (seen % stride !== 0) {
+        seen += 1;
+        continue;
+      }
+      seen += 1;
+      house.cellSlot[cell] = 0;
+      house.alive -= 1;
+      this.killSlot(house.slots[i]);
+      out.push({ x: house.sx[i], y: house.sy[i], z: house.sz[i], r: house.sr[i], g: house.sg[i], b: house.sb[i] });
+      taken += 1;
+    }
+    if (taken > 0) this.flush();
+    return taken;
+  }
+
+  /** Rubble body half-size for this house's cube scale. */
+  halfSize(index: number): number {
+    const house = this.houses[index];
+    return (house ? house.size : 0.4) * 0.58;
   }
 
   aliveRatio(index: number): number {

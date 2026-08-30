@@ -249,8 +249,10 @@ export class World {
       { style: 'choga' as const, dx: -21, dz: -16, rot: 2.6 },
       { style: 'giwa' as const, dx: 21, dz: -18, rot: -2.6 },
     ];
-    // Compact runs a coarser grid — fewer cubes on a phone.
-    const size = this.compact ? 0.36 : 0.26;
+    // Fine house cubes; the distant palace runs coarse (it reads at 90m,
+    // and its surface area would drown the triangle budget at house scale).
+    const size = this.compact ? 0.3 : 0.2;
+    const palaceSize = this.compact ? 0.55 : 0.45;
     const jitterRng = createSeededRandom((seed ^ 0x7ee1) >>> 0);
     // Shared palettes per style (cheoma's own material sharing).
     const palettes = new Map<string, unknown>();
@@ -270,7 +272,24 @@ export class World {
       results.push({ x, z, data });
       disposeBuilding(source);
     }
-    const total = results.reduce((sum, r) => sum + (r.data ? r.data.sx.length : 0), 0);
+    // The palace joins the same chewable street: its polygonal meshes go
+    // dark and the cubes carry it — the fallen backdrop can now be carved
+    // apart from the gun line, and it pancakes like everything else.
+    this.palaceVoxelIndex = -1;
+    let palaceData: ReturnType<typeof voxelizeGroup> = null;
+    const villageRoot = this.scene.children.find((child) => (child.name ?? '').startsWith('village'));
+    if (villageRoot) {
+      palaceData = voxelizeGroup(villageRoot as THREE.Group, palaceSize, jitterRng);
+      if (palaceData) {
+        villageRoot.traverse((object) => {
+          const mesh = object as THREE.Mesh;
+          if (mesh.isMesh) mesh.visible = false;
+        });
+      }
+    }
+    const total =
+      results.reduce((sum, r) => sum + (r.data ? r.data.sx.length : 0), 0) +
+      (palaceData ? palaceData.sx.length : 0);
     if (total === 0) return;
     this.voxelHouses = new VoxelHouses(this.scene, total);
     for (const result of results) {
@@ -280,7 +299,14 @@ export class World {
       this.houses.push({ x: result.x, z: result.z, box: result.data.box });
       this.obstacleBoxes.push(result.data.box.clone());
     }
+    if (palaceData) {
+      const index = this.voxelHouses.addHouse(palaceData, palaceSize);
+      if (index >= 0) this.palaceVoxelIndex = index;
+    }
   }
+
+  /** Voxel index of the palace (special collapse copy) or -1. */
+  palaceVoxelIndex = -1;
 
   voxelHouseManager(): VoxelHouses | null {
     return this.voxelHouses;
