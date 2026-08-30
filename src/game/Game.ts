@@ -7,6 +7,7 @@ import { Gunner, makeFlameTexture } from '../entities/Gunner';
 import { DebrisPool } from '../entities/DebrisPool';
 import { Box3dWorld } from '../physics/Box3dWorld';
 import { GibPool } from '../entities/GibPool';
+import { FireField } from '../entities/FireField';
 import { BloodYard } from '../entities/BloodYard';
 import { TracerPool } from '../entities/TracerPool';
 import { AudioSystem } from '../systems/AudioSystem';
@@ -64,6 +65,7 @@ export class Game {
   private approachTorches: THREE.Group | null = null;
   private readonly tracers: TracerPool;
   private readonly gibs: GibPool;
+  private fires: FireField | null = null;
   private bloodYard: BloodYard | null = null;
   private readonly vfx: VfxSystem;
   private readonly audio = new AudioSystem();
@@ -249,6 +251,7 @@ export class Game {
     this.updateTitleBest();
     onReady(false, '원귀를 깨우는 중…');
     this.rubble ??= new Box3dWorld(this.world.scene, 3072);
+    this.fires ??= new FireField(this.world.scene, this.compact, this.bunkerX, this.bunkerZ);
     // The flat slab sinks 4m below the terrain — the REAL floor is the
     // terrain tile grid (the yard slopes; corpses must rest on visible
     // ground, not inside it).
@@ -1261,6 +1264,10 @@ export class Game {
       }
     }
     vox.triggerCollapse(index, () => this.rng());
+    // 화재 — the pancaked building burns until dawn: flames over the
+    // wreckage, a warm spill across the yard, and every 원귀 near the
+    // fire drags a long shadow away from it.
+    this.fires?.ignite(center.x, center.y, center.z, isPalace ? 1.7 : 1, () => this.rng());
     this.hud.stamp('崩', isPalace ? '궁이 무너진다' : '집이 무너진다');
     this.shakeTrauma = Math.min(1, this.shakeTrauma + 0.5);
     this.fovPunch = Math.min(1.4, this.fovPunch + 0.6);
@@ -1538,6 +1545,8 @@ export class Game {
     this.rubble?.update(delta);
     this.physMs = this.physMs * 0.9 + (performance.now() - physT0) * 0.1;
     this.bloodYard?.update(delta);
+    this.fires?.update(delta, this.bunkerX, this.bunkerZ);
+    this.fires?.updateShadows((visit) => this.horde.forEachActive(visit), groundAt);
     this.impactSfxTimer -= delta;
     this.splatSfxTimer -= delta;
     this.clankSfxTimer -= delta;
@@ -1658,6 +1667,7 @@ export class Game {
     this.bloodYard?.clear();
     this.world.resetYardHouses();
     this.rubble?.reset();
+    this.fires?.reset();
     this.gunnerInstance?.reset();
     this.hud.setScore(0);
     this.hud.setBunker(this.bunkerHp, this.bunkerMax);
