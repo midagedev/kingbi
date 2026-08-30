@@ -382,6 +382,11 @@ export class VoxelHouses {
   private glowTick = 0;
   /** Shared clock for the per-house support-scan throttle. */
   private voxTime = 0;
+  /** Terrain height query — grounds the support scan's seeds. The palace
+   *  compound climbs 3.7m of slope; seeding the grid's bottom layers alone
+   *  read every terrace structure as a floating island and one stray round
+   *  pancaked the whole backdrop (the "시작하자마자 궁이 터진다" bug). */
+  private groundAt: ((x: number, z: number) => number) | null = null;
   /** Visual chunks waiting for the physics layer (support detachments). */
   private readonly detachedQueue: ChewedVoxel[] = [];
 
@@ -819,17 +824,27 @@ export class VoxelHouses {
     }
     const seen = house.supportSeen;
     seen.fill(0);
-    // Seed: occupied cells resting on the grid floor (the podium base).
+    // Seed: each column's LOWEST occupied cell, but only when it actually
+    // RESTS ON TERRAIN — the old bottom-2-layers seeding was blind on
+    // slopes (the palace terraces) and one stray round's scan ripped the
+    // whole compound loose as "floating".
     const stack: number[] = [];
-    const seedLayers = Math.min(2, ny);
+    const tolerance = Math.max(2.5 * house.size, 1.2);
+    const baseY = house.originY;
     for (let iz = 0; iz < nz; iz += 1) {
-      for (let iy = 0; iy < seedLayers; iy += 1) {
-        for (let ix = 0; ix < nx; ix += 1) {
+      for (let ix = 0; ix < nx; ix += 1) {
+        for (let iy = 0; iy < ny; iy += 1) {
           const cell = ix + iy * nx + iz * nx * ny;
-          if (cellSlot[cell] !== 0) {
+          if (cellSlot[cell] === 0) continue;
+          const wy = baseY + (iy + 0.5) * house.size;
+          const ground = this.groundAt
+            ? this.groundAt(house.originX + (ix + 0.5) * house.size, house.originZ + (iz + 0.5) * house.size)
+            : baseY;
+          if (wy - ground <= tolerance) {
             seen[cell] = 1;
             stack.push(cell);
           }
+          break; // the column's lowest cell decides
         }
       }
     }
@@ -877,6 +892,10 @@ export class VoxelHouses {
     }
     if (removed > 0) this.flush();
     house.lastScanAlive = house.alive;
+  }
+
+  setGroundAt(groundAt: (x: number, z: number) => number): void {
+    this.groundAt = groundAt;
   }
 
   /** Rigid chunks waiting from support scans — the Game layer drains

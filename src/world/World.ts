@@ -523,6 +523,7 @@ export class World {
       (palaceData ? palaceData.sx.length : 0);
     if (total === 0) return;
     this.voxelHouses = new VoxelHouses(this.scene, total);
+    this.voxelHouses.setGroundAt(groundAt);
     for (const result of results) {
       if (!result.data) continue;
       const index = this.voxelHouses.addHouse(result.data, result.vox ?? size);
