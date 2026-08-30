@@ -31,7 +31,7 @@ export interface WorldBuildResult {
 const EXPOSURE_BY_PHASE: Record<'day' | 'sunset' | 'night' | 'dawn', number> = {
   day: 1.05,
   sunset: 1.0,
-  night: 1.0,
+  night: 0.93,
   dawn: 0.97,
 };
 const EXPOSURE_BY_PHASE_COMPACT: Record<'day' | 'sunset' | 'night' | 'dawn', number> = {
@@ -278,7 +278,7 @@ export class World {
     this.disposeYardLanterns();
     const queries = this.queries();
     const spots: Array<[number, number, number]> = [
-      [cx - 7.5, cz - 2, 8.5], [cx + 7.5, cz - 2, 8.5],
+      [cx - 7.5, cz - 2, 7], [cx + 7.5, cz - 2, 7],
       [cx - 11, cz - 14, 9.5], [cx + 11, cz - 14, 9.5],
     ];
     const stone = new THREE.MeshStandardMaterial({ color: 0x4a474e, roughness: 0.95 });
@@ -309,7 +309,7 @@ export class World {
       const poolMat = new THREE.MeshBasicMaterial({
         map: glowTexture,
         transparent: true,
-        opacity: 0.33,
+        opacity: 0.24,
         blending: THREE.AdditiveBlending,
         depthWrite: false,
         toneMapped: false,
@@ -353,7 +353,7 @@ export class World {
       this.yardFlames[i].scale.setScalar(flicker);
       const pool = this.yardPools[i];
       if (pool) {
-        (pool.material as THREE.MeshBasicMaterial).opacity = 0.30 + 0.08 * flicker;
+        (pool.material as THREE.MeshBasicMaterial).opacity = 0.19 + 0.05 * flicker;
       }
     }
   }
@@ -964,8 +964,8 @@ export class World {
   // read from the gun line.
   private applyNightLighting(): void {
     this.sun.color.setHex(0x9aa2b4);
-    this.hemi.color.setHex(0x5a6d92);
-    this.hemi.groundColor.setHex(0x3a4152);
+    this.hemi.color.setHex(0x52648c);
+    this.hemi.groundColor.setHex(0x303748);
     if (this.compact) {
       // Compact ships without the IBL envmap (a measured 15fps mobile cost),
       // which left the stone gate and road ~10× darker than desktop at night.
@@ -973,14 +973,19 @@ export class World {
       this.sun.intensity = 1.3;
       this.hemi.intensity = 0.9;
     } else {
-      this.sun.intensity = 2.6;
-      this.hemi.intensity = 2.4;
+      this.sun.intensity = 0.9;
+      this.hemi.intensity = 1.25;
+      // cheoma's night env profile is tourism-readable — at full strength it
+      // papers the pale courtyard to ~130/255 (measured), drowning the fire
+      // glow and its shadows. Night wants a dim IBL fill, not a floor.
+      this.scene.environmentIntensity = 0.1;
     }
   }
 
   /** 새벽 장 lighting — low gold sun, warm bounce: the yard the painting
    *  was worth. Called from setTimeOfDay('dawn'); night re-pins its own. */
   private applyDawnLighting(): void {
+    this.scene.environmentIntensity = 1;
     this.sun.color.setHex(0xffd9a4);
     this.sun.intensity = 1.35;
     this.hemi.color.setHex(0xd8c39a);
@@ -1064,7 +1069,9 @@ export class World {
     // the siege runs a permanent night, so pin the atmospheric values every
     // frame after the env tick instead of only at phase transitions.
     if (this.nightAtmosphere && this.scene.fog instanceof THREE.Fog) {
-      this.scene.fog.color.copy(this.nightAtmosphere.fogColor);
+      // The captured night fog is tourism-readable — a bright column down
+      // the firing lane that outshines fire glow. The siege pins it darker.
+      this.scene.fog.color.copy(this.nightAtmosphere.fogColor).multiplyScalar(0.82);
       this.scene.fog.near = this.nightAtmosphere.fogNear;
       this.scene.fog.far = this.nightAtmosphere.fogFar;
       this.scene.background = this.nightAtmosphere.background;

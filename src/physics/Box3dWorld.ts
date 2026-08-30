@@ -431,6 +431,22 @@ export class Box3dWorld {
     }
   }
 
+  /** Wave sweep: corpses clear between waves (they'd bury the yard by
+   *  dawn), rubble STAYS — the demolition record persists all night. */
+  clearCorpses(): void {
+    const module = this.module;
+    for (const slot of this.corpseOrder) {
+      if (!this.slots[slot]?.active) continue;
+      module?._bx_remove?.(slot);
+      this.slots[slot].active = false;
+    }
+    this.corpseOrder.length = 0;
+    this.corpseRows.reset();
+    this.corpseMesh.count = 0;
+    for (let row = 0; row < CORPSE_ROWS; row += 1) this.hide(this.corpseMesh, row);
+    this.corpseMesh.instanceMatrix.needsUpdate = true;
+  }
+
   /** Run restart: bodies gone, instances hidden — the yard is swept. */
   reset(): void {
     this.module?._bx_clear?.();

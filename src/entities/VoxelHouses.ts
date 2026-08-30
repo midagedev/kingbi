@@ -222,7 +222,7 @@ export function voxelizeGroup(
     const fv = keptUv[f * 2 + 1];
     normal.copy(ab.subVectors(c, a)).cross(ac.subVectors(b, a)).normalize();
     if (normal.lengthSq() < 0.5) continue;
-    const shade = 0.72 + 0.34 * Math.max(0, normal.dot(moon));
+    const shade = 0.70 + 0.36 * Math.max(0, normal.dot(moon));
     const color = sampleMaterial(keptMat[f] as THREE.Material, fu, fv).multiplyScalar(shade * 0.88);
     const tx0 = Math.floor((Math.min(a.x, b.x, c.x) - box.min.x) / size) - 1;
     const tx1 = Math.floor((Math.max(a.x, b.x, c.x) - box.min.x) / size) + 1;

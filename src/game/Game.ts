@@ -438,6 +438,10 @@ export class Game {
   private startWave(index: number): void {
     this.day = index;
     this.waveActive = true;
+    // 웨이브 단위 시체 정리 — the last wave's dead are swept as the next
+    // river arrives (the lull keeps the pile as the trophy; rubble stays
+    // all night — only the corpses go).
+    this.rubble?.clearCorpses();
     // Wave 1 stays survivable for a first-timer; the river swells fast after.
     this.waveSpawnQueue = Math.min(this.compact ? 420 : 900, WAVE_BASE + (index - 1) * WAVE_STEP);
     // Every 5th wave is 대격노 — the river overflows.

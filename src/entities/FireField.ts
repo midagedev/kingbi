@@ -126,7 +126,7 @@ export class FireField {
       color: 0x000000,
       alphaMap: this.streakTexture,
       transparent: true,
-      opacity: 0.62,
+      opacity: 0.72,
       depthWrite: false,
     });
     this.shadowMesh = new THREE.InstancedMesh(shadowGeometry, shadowMaterial, MAX_SHADOWS);
@@ -268,7 +268,7 @@ export class FireField {
       const pulse = 0.8
         + 0.2 * Math.sin(this.time * 6.1 + fire.glowPhase)
           * Math.sin(this.time * 2.3 + fire.glowPhase * 0.6);
-      (fire.glow.material as THREE.MeshBasicMaterial).opacity = (0.24 + 0.1 * pulse) * dying;
+      (fire.glow.material as THREE.MeshBasicMaterial).opacity = (0.36 + 0.14 * pulse) * dying;
       const s = 1 + 0.05 * pulse;
       fire.glow.scale.set(s, s, 1);
     }
