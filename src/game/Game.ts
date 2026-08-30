@@ -35,6 +35,11 @@ const CLAW_DPS = 5.5;
 const MAX_CLAW_ATTACKERS = 6;
 const AIM_ASSIST_RADIUS = 1.15;
 const SHOT_FORCE = 4.0;
+/** zombie-rag.jpg texel average, LINEAR (measured 125/117/104 sRGB) — the
+ *  live horde's robe albedo gets this multiplied in by its fabric map; the
+ *  corpse material has no texture, so we fold it into the instance color. */
+const RAG_AVG_LINEAR = new THREE.Color(0.205, 0.178, 0.138);
+const CORPSE_ROBE = new THREE.Color();
 
 interface Tuning extends DebugTuning {
   hitstopSeconds: number;
@@ -1065,7 +1070,7 @@ export class Game {
     const hit = this.horde.queryRay(
       muzzle.x, muzzle.z, dirX, dirZ, 160, AIM_ASSIST_RADIUS * this.assistMult, this.rayHits,
     );
-    const houseHit = this.world.houseHitTest(muzzle.x, muzzle.z, dirX, dirZ, 160);
+    const houseHit = this.world.houseHitTest(muzzle.x, muzzle.z, dirX, dirZ, 160, muzzle.y, shotSlope);
     this.shotsFired += 1;
     if (hit && (!houseHit || this.rayHits[0].dist <= houseHit.dist)) {
       this.shotsHit += 1;
@@ -1110,10 +1115,12 @@ export class Game {
         }
       }
     } else if (houseHit) {
-      // 너덜너덜 — the bullet chews cubes out of the house where it lands.
+      // 너덜너덜 — the bullet chews cubes out of the house where it lands:
+      // the marched CELL center, so the crater sits in the wall it struck
+      // (rounds that slip through an open room keep flying).
       endX = houseHit.x;
       endZ = houseHit.z;
-      endY = muzzle.y + shotSlope * houseHit.dist;
+      endY = houseHit.y;
       this.shotsHit += 1;
       this.chewHouse(houseHit.index, endX, endY, endZ, dirX, dirZ, 2.0 + (this.splash ? 1.5 : 0));
     } else {
@@ -1374,20 +1381,23 @@ export class Game {
       const brute = type === 'brute';
       const tint = this.rng();
       const speed = (7.5 + this.rng() * 7) * (brute ? 0.55 : 1);
-      // 시체 색 = 로브 팔레트 × 그라임(살아있는 좀비는 직물 텍스처가 곱해져
-      // 훨씬 어둡다 — raw palette read WHITE at night). 한 단계 아래로.
-      const grime = 0.56;
-      const robe = brute
-        ? [0.82 * grime, 0.8 * grime, 0.75 * grime]
-        : type === 'runner'
-          ? [0.585 * grime + tint * 0.03, 0.545 * grime + tint * 0.03, 0.475 * grime + tint * 0.03]
-          : type === 'shield'
-            ? [0.53 * grime, 0.5 * grime, 0.455 * grime]
-            : [0.7 * grime + tint * 0.035 + (elite ? 0.05 : 0), 0.665 * grime + tint * 0.03, 0.6 * grime + tint * 0.03];
+      // 시체 색 = 로브(sRGB 저작값)를 선형 변환 후 zombie-rag 짜임 평균을
+      // 곱한다. setColorAt은 선형만 받으므로 sRGB 숫자를 그대로 넘기면 밤
+      // 블룸에서 하얗게 떠 보였다(the "시체가 하얀색" bug). 살아있는 원귀는
+      // 같은 로브가 텍스처까지 거쳐 훨씬 어둡다 — 시체가 그 아래로 떨어진다.
+      CORPSE_ROBE.setRGB(
+        brute ? 0.82 : type === 'runner' ? 0.585 + tint * 0.03
+          : type === 'shield' ? 0.53 : 0.7 + tint * 0.035 + (elite ? 0.05 : 0),
+        brute ? 0.8 : type === 'runner' ? 0.545 + tint * 0.03
+          : type === 'shield' ? 0.5 : 0.665 + tint * 0.03,
+        brute ? 0.75 : type === 'runner' ? 0.475 + tint * 0.03
+          : type === 'shield' ? 0.455 : 0.6 + tint * 0.03,
+        THREE.SRGBColorSpace,
+      ).multiply(RAG_AVG_LINEAR);
       this.rubble.spawnCorpse(
         position.x, gibY + 0.15, position.z,
         this.rng() * Math.PI * 2, brute ? 2.8 : type === 'runner' ? 0.72 : type === 'shield' ? 1.05 : 1,
-        robe[0], robe[1], robe[2],
+        CORPSE_ROBE.r, CORPSE_ROBE.g, CORPSE_ROBE.b,
         dirX * speed, 4.5 + this.rng() * 4, dirZ * speed,
         (this.rng() - 0.5) * 10, (this.rng() - 0.5) * 8, (this.rng() - 0.5) * 10,
       );
@@ -1956,6 +1966,20 @@ export class Game {
       /** Chew cubes out of the nearest house (voxel demolition QA). */
       chewHouseAt: (x: number, z: number, y = 2, radius = 1.2) =>
         this.debugChewAt(x, z, y, radius),
+      /** Per-house interior audit — enclosed room voids vs solid fill. */
+      voxelHollow: () => this.world.voxelHouseManager()?.hollowDebug() ?? [],
+      /** Raw corpse instanceColor rows (colorspace QA). */
+      corpseColorRows: () => {
+        const mesh = this.rubble?.corpseMesh;
+        const buf = mesh?.instanceColor?.array;
+        if (!buf) return [] as number[][];
+        const rows: number[][] = [];
+        const n = Math.min(6, mesh.count);
+        for (let i = 0; i < n; i += 1) {
+          rows.push([+buf[i * 3].toFixed(3), +buf[i * 3 + 1].toFixed(3), +buf[i * 3 + 2].toFixed(3)]);
+        }
+        return rows;
+      },
       /** Force the structure collapse of the house nearest a point. */
       collapseHouseAt: (x: number, z: number) => {
         const indices = this.world.houseIndicesNear(x, z, 8);

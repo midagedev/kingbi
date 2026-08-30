@@ -557,9 +557,16 @@ export class World {
     return out;
   }
 
-  /** 2D ray vs house footprints — the gatling's chew target. */
-  houseHitTest(ox: number, oz: number, dx: number, dz: number, maxDist: number): { index: number; dist: number; x: number; z: number } | null {
-    let best: { index: number; dist: number; x: number; z: number } | null = null;
+  /** Bullet target: 2D footprint broad phase, then a per-house voxel march.
+   *  A house only stops the round where an OCCUPIED cell stands — chewed-
+   *  open rooms, door gaps and arcs over low walls let bullets pass through
+   *  (the rooms are hollow; hollowDebug audits it). Footprint fallback only
+   *  when the voxel manager is absent. */
+  houseHitTest(
+    ox: number, oz: number, dx: number, dz: number, maxDist: number,
+    oy = 1.2, dy = 0,
+  ): { index: number; dist: number; x: number; y: number; z: number } | null {
+    const candidates: Array<{ index: number; t: number }> = [];
     this.houses.forEach((house, index) => {
       if (this.voxelHouses?.isCollapsed(index)) return;
       const box = house.box;
@@ -570,12 +577,22 @@ export class World {
       const tmin = Math.max(Math.min(tx1, tx2), Math.min(tz1, tz2));
       const tmax = Math.min(Math.max(tx1, tx2), Math.max(tz1, tz2));
       if (tmax < Math.max(tmin, 0.5) || tmin > maxDist) return;
-      const t = Math.max(tmin, 0.5);
-      if (!best || t < best.dist) {
-        best = { index, dist: t, x: ox + dx * t, z: oz + dz * t };
-      }
+      candidates.push({ index, t: Math.max(tmin, 0.5) });
     });
-    return best;
+    candidates.sort((a, b) => a.t - b.t);
+    if (!this.voxelHouses) {
+      const first = candidates[0];
+      return first
+        ? { index: first.index, dist: first.t, x: ox + dx * first.t, y: oy + dy * first.t, z: oz + dz * first.t }
+        : null;
+    }
+    for (const candidate of candidates) {
+      const march = this.voxelHouses.raycastCell(
+        candidate.index, ox, oy, oz, dx, dy, dz, maxDist,
+      );
+      if (march) return { index: candidate.index, dist: march.dist, x: march.x, y: march.y, z: march.z };
+    }
+    return null;
   }
 
   /** Stage probe: where the yard houses actually landed (QA/vision rigs). */

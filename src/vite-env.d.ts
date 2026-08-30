@@ -53,6 +53,10 @@ interface ThreeGameTestHooks {
   chewHouseAt(x: number, z: number, y?: number, radius?: number): number;
   /** Force the structure collapse of the house nearest a point. */
   collapseHouseAt(x: number, z: number): void;
+  /** Per-house interior audit — enclosed room voids vs solid fill (QA). */
+  voxelHollow(): Array<{ index: number; cells: number; voids: number; layers: number; layersWithVoids: number }>;
+  /** Raw corpse instanceColor rows, linear (colorspace QA). */
+  corpseColorRows(): number[][];
   /** Detonate the 부적 봉인 at a world point (sigil + purge QA). */
   fireSealAt(x: number, z: number): void;
   /** Compose the 밤의 그림 card as a PNG data URL (painting QA). */

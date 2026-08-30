@@ -442,6 +442,129 @@ export class VoxelHouses {
     return house.cellSlot[ix + iy * house.nx + iz * house.nx * house.ny] !== 0;
   }
 
+  /** Interior audit (QA): flood each Y layer's empty cells from the layer
+   *  border — unreached empties are enclosed ROOM voids. A solid-filled
+   *  house reports ~0 voids; a proper shell reports room-sized counts. */
+  hollowDebug(): Array<{ index: number; cells: number; voids: number; layers: number; layersWithVoids: number }> {
+    const out: Array<{ index: number; cells: number; voids: number; layers: number; layersWithVoids: number }> = [];
+    for (const house of this.houses) {
+      const { nx, ny, nz } = house;
+      let voids = 0;
+      let layersWithVoids = 0;
+      for (let iy = 0; iy < ny; iy += 1) {
+        const seen = new Uint8Array(nx * nz);
+        const stack: number[] = [];
+        for (let ix = 0; ix < nx; ix += 1) stack.push(ix, 0, ix, nz - 1);
+        for (let iz = 0; iz < nz; iz += 1) stack.push(0, iz, nx - 1, iz);
+        while (stack.length > 0) {
+          const iz = stack.pop()!;
+          const ix = stack.pop()!;
+          if (ix < 0 || iz < 0 || ix >= nx || iz >= nz) continue;
+          const cell = ix + iz * nx;
+          if (seen[cell] || this.occupiedCell(house, ix, iy, iz)) continue;
+          seen[cell] = 1;
+          stack.push(ix + 1, iz, ix - 1, iz, ix, iz + 1, ix, iz - 1);
+        }
+        let layerVoid = 0;
+        for (let iz = 0; iz < nz; iz += 1) {
+          for (let ix = 0; ix < nx; ix += 1) {
+            if (!seen[ix + iz * nx] && !this.occupiedCell(house, ix, iy, iz)) layerVoid += 1;
+          }
+        }
+        if (layerVoid > 4) layersWithVoids += 1;
+        voids += layerVoid;
+      }
+      out.push({ index: house.index, cells: house.count, voids, layers: ny, layersWithVoids });
+    }
+    return out;
+  }
+
+  /** 3D bullet march through one house's cell grid (Amanatides–Woo DDA).
+   *  Direction is (dx, dy, dz) with dx²+dz² = 1 and dy the vertical slope
+   *  per ground meter, so t stays in ground meters (queryRay-compatible).
+   *  Returns the FIRST occupied cell: rounds fly through chewed-open
+   *  rooms, door gaps and over low walls instead of stopping on the
+   *  footprint box — the rooms really are empty (see hollowDebug). */
+  raycastCell(
+    index: number,
+    ox: number, oy: number, oz: number,
+    dx: number, dy: number, dz: number,
+    maxDist: number,
+  ): { dist: number; x: number; y: number; z: number } | null {
+    const house = this.houses[index];
+    if (!house) return null;
+    const size = house.size;
+    const minX = house.originX;
+    const minY = house.originY;
+    const minZ = house.originZ;
+    const maxX = minX + house.nx * size;
+    const maxY = minY + house.ny * size;
+    const maxZ = minZ + house.nz * size;
+    // Clip the ray to the grid AABB (any axis miss → no hit at all).
+    let tEnter = 0;
+    let tExit = maxDist;
+    for (const [o, d, lo, hi] of [
+      [ox, dx, minX, maxX], [oy, dy, minY, maxY], [oz, dz, minZ, maxZ],
+    ] as const) {
+      if (Math.abs(d) < 1e-8) {
+        if (o < lo || o > hi) return null;
+        continue;
+      }
+      let t0 = (lo - o) / d;
+      let t1 = (hi - o) / d;
+      if (t0 > t1) { const swap = t0; t0 = t1; t1 = swap; }
+      tEnter = Math.max(tEnter, t0);
+      tExit = Math.min(tExit, t1);
+      if (tEnter > tExit) return null;
+    }
+    let t = Math.max(tEnter, 0);
+    let ix = Math.min(house.nx - 1, Math.max(0, Math.floor((ox + dx * t - minX) / size)));
+    let iy = Math.min(house.ny - 1, Math.max(0, Math.floor((oy + dy * t - minY) / size)));
+    let iz = Math.min(house.nz - 1, Math.max(0, Math.floor((oz + dz * t - minZ) / size)));
+    const stepX = dx > 0 ? 1 : -1;
+    const stepY = dy > 0 ? 1 : -1;
+    const stepZ = dz > 0 ? 1 : -1;
+    const tDeltaX = Math.abs(dx) > 1e-8 ? Math.abs(size / dx) : Infinity;
+    const tDeltaY = Math.abs(dy) > 1e-8 ? Math.abs(size / dy) : Infinity;
+    const tDeltaZ = Math.abs(dz) > 1e-8 ? Math.abs(size / dz) : Infinity;
+    const planeAt = (origin: number, dir: number, cell: number, gridMin: number) =>
+      dir > 0 ? (gridMin + (cell + 1) * size - origin) / dir : (gridMin + cell * size - origin) / dir;
+    let tMaxX = Math.abs(dx) > 1e-8 ? planeAt(ox, dx, ix, minX) : Infinity;
+    let tMaxY = Math.abs(dy) > 1e-8 ? planeAt(oy, dy, iy, minY) : Infinity;
+    let tMaxZ = Math.abs(dz) > 1e-8 ? planeAt(oz, dz, iz, minZ) : Infinity;
+    const guardMax = house.nx + house.ny + house.nz + 3;
+    for (let guard = 0; guard <= guardMax; guard += 1) {
+      if (this.occupiedCell(house, ix, iy, iz)) {
+        return {
+          dist: t,
+          x: minX + (ix + 0.5) * size,
+          y: minY + (iy + 0.5) * size,
+          z: minZ + (iz + 0.5) * size,
+        };
+      }
+      if (tMaxX < tMaxY && tMaxX < tMaxZ) {
+        if (tMaxX > tExit) return null;
+        t = tMaxX;
+        tMaxX += tDeltaX;
+        ix += stepX;
+        if (ix < 0 || ix >= house.nx) return null;
+      } else if (tMaxY < tMaxZ) {
+        if (tMaxY > tExit) return null;
+        t = tMaxY;
+        tMaxY += tDeltaY;
+        iy += stepY;
+        if (iy < 0 || iy >= house.ny) return null;
+      } else {
+        if (tMaxZ > tExit) return null;
+        t = tMaxZ;
+        tMaxZ += tDeltaZ;
+        iz += stepZ;
+        if (iz < 0 || iz >= house.nz) return null;
+      }
+    }
+    return null;
+  }
+
   /** 창호지 — stamp warm unlit panes on the outer shell. A cell qualifies
    *  when it sits in the wall band, has open space on an axis, and the open
    *  side faces AWAY from the house center (thin 1-cell walls included).

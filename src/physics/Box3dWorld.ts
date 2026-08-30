@@ -119,19 +119,32 @@ const RUBBLE_VISUAL = 0.86;
 
 /** Lying 원귀 measured to match the standing one: thin legs, coat-spread
  *  torso, horned head, arms slack at the sides — merged non-indexed (the
- *  mergeGeometries constraint) into one draw per corpse instance. */
+ *  mergeGeometries constraint) into one draw per corpse instance. Each
+ *  part carries a vertex-color tint (head pale, hem dark) so the single
+ *  instanceColor per body still reads as a dressed figure, not a gray
+ *  box. */
 function buildCorpseGeometry(): THREE.BufferGeometry {
   const parts = [
-    [0.5, 0.17, 0.24, -0.32, -0.02, 0], // legs (folded shins)
-    [0.42, 0.34, 0.5, 0.13, 0, 0], // torso + coat
-    [0.3, 0.12, 0.58, 0.02, -0.1, 0], // coat hem flare
-    [0.2, 0.2, 0.2, 0.44, 0.04, 0.05], // horned head
-    [0.36, 0.11, 0.12, 0.18, 0.08, 0.3], // arm
-    [0.36, 0.11, 0.12, 0.18, 0.08, -0.3], // arm
-  ].map(([w, h, d, x, y, z]) => {
+    [0.5, 0.17, 0.24, -0.32, -0.02, 0, 0.88], // legs (folded shins)
+    [0.42, 0.34, 0.5, 0.13, 0, 0, 1.0], // torso + coat
+    [0.3, 0.12, 0.58, 0.02, -0.1, 0, 0.82], // coat hem flare
+    [0.2, 0.2, 0.2, 0.44, 0.04, 0.05, 1.14], // horned head
+    [0.36, 0.11, 0.12, 0.18, 0.08, 0.3, 0.95], // arm
+    [0.36, 0.11, 0.12, 0.18, 0.08, -0.3, 0.95], // arm
+  ].map(([w, h, d, x, y, z, tint]) => {
     const box = new THREE.BoxGeometry(w, h, d);
     box.translate(x, y, z);
-    return box.toNonIndexed();
+    const nonIndexed = box.toNonIndexed();
+    box.dispose();
+    const vertexCount = nonIndexed.attributes.position.count;
+    const tints = new Float32Array(vertexCount * 3);
+    for (let i = 0; i < tints.length; i += 3) {
+      tints[i] = tint;
+      tints[i + 1] = tint;
+      tints[i + 2] = tint;
+    }
+    nonIndexed.setAttribute('color', new THREE.BufferAttribute(tints, 3));
+    return nonIndexed;
   });
   const merged = mergeGeometries(parts, false) ?? parts[0];
   for (const part of parts) part.dispose();
@@ -169,7 +182,7 @@ export class Box3dWorld {
     }
 
     const corpseGeometry = buildCorpseGeometry();
-    const corpseMaterial = new THREE.MeshStandardMaterial({ roughness: 1, metalness: 0, envMapIntensity: 0.18 });
+    const corpseMaterial = new THREE.MeshStandardMaterial({ roughness: 1, metalness: 0, envMapIntensity: 0.18, vertexColors: true });
     this.corpseMesh = new THREE.InstancedMesh(corpseGeometry, corpseMaterial, CORPSE_ROWS);
     this.corpseMesh.frustumCulled = false;
     this.corpseMesh.receiveShadow = true;
