@@ -76,10 +76,12 @@ const NoirGradeShader = {
       float keep = smoothstep(0.16, 0.42, sat) * smoothstep(0.20, 0.52, warmDom);
 
       // ── Ink on hanji: paper-toned ink, not void. Highlights carry the
-      // warmth of aged paper; the print breathes. ──
+      // warmth of aged paper; the print breathes. The toe stays open enough
+      // that unlit facades read as silhouettes, not holes (the old pivot
+      // crushed every input under ~0.12 luma into paper-black). ──
       float y = luma(col);
-      y = y * 1.45 + 0.06;
-      float g = clamp((y - 0.30) * 1.35 + 0.30, 0.0, 1.0);
+      y = y * 1.38 + 0.12;
+      float g = clamp((y - 0.235) * 1.26 + 0.26, 0.0, 1.0);
       g = g * g * (3.0 - 2.0 * g);
       // The carve: strong edges inked toward black, mid edges left to the
       // print so faces and ground stay soft brushwork.

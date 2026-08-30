@@ -31,7 +31,7 @@ export interface WorldBuildResult {
 const EXPOSURE_BY_PHASE: Record<'day' | 'sunset' | 'night' | 'dawn', number> = {
   day: 1.05,
   sunset: 1.0,
-  night: 0.85,
+  night: 1.0,
   dawn: 0.97,
 };
 const EXPOSURE_BY_PHASE_COMPACT: Record<'day' | 'sunset' | 'night' | 'dawn', number> = {
@@ -243,22 +243,48 @@ export class World {
   /** 마당 석등 — warm anchors around the defense point. The flattened yard
    *  lost the candle-lit well to the re-staged viewpoint; four stone
    *  lanterns give the night its focal warmth. Flames are toneMapped-off
-   *  emissive — bloom sells the glow (real PointLights cost ~8fps a pair
+   *  emissive and each lantern lays a soft additive GROUND POOL beneath —
+   *  the light reads as if it spills (real PointLights cost ~8fps a pair
    *  in per-pixel light math across every standard surface). */
   private yardLanterns: THREE.Group[] = [];
   private yardFlames: THREE.Mesh[] = [];
+  private yardPools: THREE.Mesh[] = [];
   private lanternTime = 0;
+  private lanternGlowTexture: THREE.Texture | null = null;
+
+  private buildLanternGlowTexture(): THREE.Texture {
+    if (this.lanternGlowTexture) return this.lanternGlowTexture;
+    const side = 128;
+    const canvas = document.createElement('canvas');
+    canvas.width = side;
+    canvas.height = side;
+    const ctx = canvas.getContext('2d');
+    if (ctx) {
+      const gradient = ctx.createRadialGradient(side / 2, side / 2, 2, side / 2, side / 2, side / 2);
+      gradient.addColorStop(0.0, 'rgba(255,196,128,0.82)');
+      gradient.addColorStop(0.35, 'rgba(255,158,84,0.36)');
+      gradient.addColorStop(0.7, 'rgba(255,128,58,0.09)');
+      gradient.addColorStop(1.0, 'rgba(255,120,50,0)');
+      ctx.fillStyle = gradient;
+      ctx.fillRect(0, 0, side, side);
+    }
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.colorSpace = THREE.SRGBColorSpace;
+    this.lanternGlowTexture = texture;
+    return texture;
+  }
 
   placeYardLanterns(cx: number, cz: number): void {
     this.disposeYardLanterns();
     const queries = this.queries();
-    const spots: Array<[number, number]> = [
-      [cx - 7.5, cz - 2], [cx + 7.5, cz - 2],
-      [cx - 11, cz - 14], [cx + 11, cz - 14],
+    const spots: Array<[number, number, number]> = [
+      [cx - 7.5, cz - 2, 8.5], [cx + 7.5, cz - 2, 8.5],
+      [cx - 11, cz - 14, 9.5], [cx + 11, cz - 14, 9.5],
     ];
     const stone = new THREE.MeshStandardMaterial({ color: 0x4a474e, roughness: 0.95 });
     const flameMat = new THREE.MeshBasicMaterial({ color: 0xffc06a, toneMapped: false });
-    spots.forEach(([x, z], i) => {
+    const glowTexture = this.buildLanternGlowTexture();
+    spots.forEach(([x, z, poolSize], i) => {
       const ground = queries.heightAt(x, z);
       const group = new THREE.Group();
       const pedestal = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.3, 0.95, 7), stone);
@@ -277,6 +303,25 @@ export class World {
       group.name = 'yard-lantern';
       this.scene.add(group);
       this.yardLanterns.push(group);
+      // The spilled light: one flat additive disc, flickering with its
+      // lantern. depthWrite-off so corpses/rubble layered on top still
+      // composite correctly.
+      const poolMat = new THREE.MeshBasicMaterial({
+        map: glowTexture,
+        transparent: true,
+        opacity: 0.33,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+        toneMapped: false,
+      });
+      const pool = new THREE.Mesh(new THREE.PlaneGeometry(poolSize, poolSize), poolMat);
+      pool.rotation.x = -Math.PI / 2;
+      pool.rotation.z = i * 1.3;
+      pool.position.set(x, ground + 0.04, z);
+      pool.renderOrder = 1;
+      pool.name = 'yard-lantern-pool';
+      this.scene.add(pool);
+      this.yardPools.push(pool);
     });
   }
 
@@ -288,8 +333,14 @@ export class World {
       });
       group.removeFromParent();
     }
+    for (const pool of this.yardPools) {
+      pool.geometry.dispose();
+      (pool.material as THREE.Material).dispose();
+      pool.removeFromParent();
+    }
     this.yardLanterns = [];
     this.yardFlames = [];
+    this.yardPools = [];
   }
 
   /** Candle-flicker for the yard lanterns (deterministic in game time). */
@@ -300,6 +351,10 @@ export class World {
       const phase = i * 1.7;
       const flicker = 0.86 + 0.14 * Math.sin(this.lanternTime * 7.3 + phase) * Math.sin(this.lanternTime * 2.9 + phase * 1.3);
       this.yardFlames[i].scale.setScalar(flicker);
+      const pool = this.yardPools[i];
+      if (pool) {
+        (pool.material as THREE.MeshBasicMaterial).opacity = 0.30 + 0.08 * flicker;
+      }
     }
   }
 
@@ -904,10 +959,13 @@ export class World {
   // Siege night lighting: noir grade wants a deeper murk with harder
   // falloff so torches, tracers and eyes carve silhouettes out of black —
   // but the kill yard stays a step above pitch so bodies and gibs read.
+  // The 0.58/0.33 desktop pair left moon-away facades under the grade's
+  // old toe (houses vanished into paper-black) — lifted until silhouettes
+  // read from the gun line.
   private applyNightLighting(): void {
     this.sun.color.setHex(0x9aa2b4);
-    this.hemi.color.setHex(0x27303f);
-    this.hemi.groundColor.setHex(0x11151d);
+    this.hemi.color.setHex(0x5a6d92);
+    this.hemi.groundColor.setHex(0x3a4152);
     if (this.compact) {
       // Compact ships without the IBL envmap (a measured 15fps mobile cost),
       // which left the stone gate and road ~10× darker than desktop at night.
@@ -915,8 +973,8 @@ export class World {
       this.sun.intensity = 1.3;
       this.hemi.intensity = 0.9;
     } else {
-      this.sun.intensity = 0.58;
-      this.hemi.intensity = 0.33;
+      this.sun.intensity = 2.6;
+      this.hemi.intensity = 2.4;
     }
   }
 
