@@ -18,6 +18,8 @@ interface Fire {
   z: number;
   scale: number;
   age: number;
+  /** Accumulator for the slow devour cadence (불은 집을 먹는다). */
+  burnTimer: number;
   /** <0 while burning forever; >=0 counts the fade-out (cap overflow). */
   fade: number;
   glow: THREE.Mesh;
@@ -149,9 +151,19 @@ export class FireField {
 
   /** A building just pancaked — light it. `jitter` is the game's seeded rng. */
   ignite(x: number, groundY: number, z: number, scale: number, jitter: () => number): void {
+    // Re-ignite guard: a house already alight refreshes its fire instead
+    // of stacking a second one on the same rubble.
+    for (const existing of this.fires) {
+      if (Math.hypot(existing.x - x, existing.z - z) < 6) {
+        existing.fade = -1;
+        if (existing.scale < scale) existing.scale = scale;
+        return;
+      }
+    }
     const fire: Fire = {
       x, y: groundY, z, scale,
       age: 0,
+      burnTimer: 0,
       fade: -1,
       glow: new THREE.Mesh(
         new THREE.PlaneGeometry((9 + 5 * scale) * 2, (9 + 5 * scale) * 2),
@@ -292,6 +304,32 @@ export class FireField {
         this.light.intensity = 0;
       }
     }
+  }
+
+  /** 불은 집을 먹는다 — every live fire pops slow DEVOUR bites that the
+   *  game layer chews with its seeded rng. Cadence and bite positions are
+   *  time-and-phase sines (deterministic, no rng here): the bite point
+   *  slowly spirals through the footprint and climbs the walls, so the
+   *  house sheds flakes from everywhere before it gives. */
+  collectBurnBites(delta: number, out: Array<{ x: number; y: number; z: number; scale: number }>): number {
+    let popped = 0;
+    for (const fire of this.fires) {
+      if (fire.fade >= 0) continue;
+      fire.burnTimer += delta;
+      const interval = 0.34 + 0.3 * Math.abs(Math.sin(fire.glowPhase));
+      if (fire.burnTimer < interval) continue;
+      fire.burnTimer = 0;
+      const wander = fire.scale * 2.4;
+      const angle = fire.glowPhase + this.time * 0.8;
+      out.push({
+        x: fire.x + Math.cos(angle) * wander * Math.abs(Math.sin(this.time * 0.63 + fire.glowPhase)),
+        z: fire.z + Math.sin(angle) * wander * Math.abs(Math.cos(this.time * 0.47 + fire.glowPhase * 2.1)),
+        y: fire.y + 0.7 + Math.abs(Math.sin(this.time * 0.4 + fire.glowPhase * 3.3)) * 2.1,
+        scale: fire.scale,
+      });
+      popped += 1;
+    }
+    return popped;
   }
 
   /** Long zombie shadows: every active 원귀 near a fire drags a tapered

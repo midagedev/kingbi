@@ -487,6 +487,43 @@ export class Box3dWorld {
     return kicked;
   }
 
+  /** Radial pop for burning rubble: kick up to `count` bodies within
+   *  `radius` of a point (fire bites keep the heap sparking and settling). */
+  kickNear(x: number, y: number, z: number, radius: number, count: number): number {
+    const module = this.module;
+    if (!module?._bx_kick || this.statesBase < 0 || this.statesCount === 0) return 0;
+    if ((module._bx_awake_count?.() ?? 0) > 120) return 0;
+    const states = module.HEAPF32;
+    const hits: Array<{ slot: number; d: number }> = [];
+    const rSq = radius * radius;
+    for (let i = 0; i < this.statesCount; i += 1) {
+      const o = this.statesBase + 1 + i * 8;
+      const slot = states[o + 7] | 0;
+      const record = this.slots[slot];
+      if (!record?.active) continue;
+      const dx = states[o] - x;
+      const dy = states[o + 1] - y;
+      const dz = states[o + 2] - z;
+      const d = dx * dx + dy * dy + dz * dz;
+      if (d > rSq) continue;
+      hits.push({ slot, d });
+    }
+    if (hits.length === 0) return 0;
+    hits.sort((a, b) => a.d - b.d);
+    const kicked = Math.min(hits.length, count);
+    for (let i = 0; i < kicked; i += 1) {
+      const { slot } = hits[i];
+      const variance = 0.7 + 0.6 * ((slot * 0.618) % 1);
+      module._bx_kick?.(
+        slot,
+        (variance - 1) * 2, 2.2 * variance, (1 - variance) * 2,
+        (variance - 1) * 7, variance * 4, (1 - variance) * 7,
+      );
+      this.slots[slot].needsWrite = true;
+    }
+    return kicked;
+  }
+
   /** Wave sweep: corpses clear between waves (they'd bury the yard by
    *  dawn), rubble STAYS — the demolition record persists all night. */
   clearCorpses(): void {

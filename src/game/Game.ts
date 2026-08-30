@@ -1243,6 +1243,11 @@ export class Game {
       this.debris?.chipBurst(x, y, z, dirX, dirZ, 10, () => this.rng());
       this.shakeTrauma = Math.min(1, this.shakeTrauma + 0.03);
     }
+    // 화재 점화(붕괴 전) — a hard-chewed house catches BEFORE it pancakes;
+    // the burn bites below then devour it until the threshold sweep fells it.
+    if (vox.aliveRatio(index) < 0.88 && this.fires) {
+      this.fires.ignite(x, this.world.queries().heightAt(x, z), z, 0.85, () => this.rng());
+    }
     if (vox.aliveRatio(index) < 0.78) this.collapseHouse(index);
   }
 
@@ -1304,6 +1309,8 @@ export class Game {
   }
 
   private readonly chewScratch: Array<{ x: number; y: number; z: number; r: number; g: number; b: number; s: number }> = [];
+  /** Devour points popped by burning houses this frame (see updateFx). */
+  private readonly burnBites: Array<{ x: number; y: number; z: number; scale: number }> = [];
   private woodSfxTimer = 0;
   /** Rolling box3d update cost (ms) — the physics budget probe. */
   private physMs = 0;
@@ -1585,6 +1592,47 @@ export class Game {
     {
       const vox = this.world.voxelHouseManager();
       if (vox) {
+        // 불은 집을 먹는다 — every live fire pops a slow devour bite: the
+        // house sheds burning flakes on its own until the threshold sweeps
+        // it flat; collapsed-and-burning rubble twitches under the bites.
+        this.burnBites.length = 0;
+        if (this.fires?.collectBurnBites(delta, this.burnBites)) {
+          for (const bite of this.burnBites) {
+            this.chewScratch.length = 0;
+            let eaten = 0;
+            for (const index of this.world.houseIndicesNear(bite.x, bite.z, 6)) {
+              if (vox.isCollapsed(index)) continue;
+              eaten += vox.chew(bite.x, bite.y + this.rng() * 0.5, bite.z, 0.5 + this.rng() * 0.6 * bite.scale, this.chewScratch);
+            }
+            if (eaten > 0 && this.rubble?.ready) {
+              const budget = Math.min(3, this.chewScratch.length);
+              const stride = Math.max(1, Math.floor(this.chewScratch.length / budget));
+              let spawned = 0;
+              for (let i = 0; i < this.chewScratch.length && spawned < budget; i += stride) {
+                const cube = this.chewScratch[i];
+                spawned += 1;
+                this.rubble.spawnRubble(
+                  cube.x, cube.y, cube.z,
+                  cube.s * 0.5 * (0.5 + this.rng() * 0.25), cube.r, cube.g, cube.b,
+                  (this.rng() - 0.5) * 1.6, 1.2 + this.rng() * 2.2, (this.rng() - 0.5) * 1.6,
+                  (this.rng() - 0.5) * 8, (this.rng() - 0.5) * 8, (this.rng() - 0.5) * 8,
+                );
+              }
+              if (this.collapseDustTimer <= 0) {
+                this.collapseDustTimer = 0.3;
+                this.vfx.demolitionDust(bite.x, bite.y, bite.z, 3, () => this.rng());
+              }
+              if (this.woodSfxTimer <= 0) {
+                this.woodSfxTimer = 0.45;
+                this.audio.armorClank();
+              }
+            } else {
+              // Burning rubble: the bites still pop chunks — the heap
+              // keeps sparking and settling under its own fire.
+              this.rubble?.kickNear(bite.x, bite.y, bite.z, 4.5, 2);
+            }
+          }
+        }
         for (let i = 0; i < vox.houseCount; i += 1) {
           if (!vox.isCollapsed(i) && vox.aliveRatio(i) < 0.78) this.collapseHouse(i);
         }
