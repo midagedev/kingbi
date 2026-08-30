@@ -73,6 +73,8 @@ interface ThreeGameTestHooks {
   defenseRig(): { gunX: number; gunY: number; gunZ: number; gateX: number; gateY: number; gateZ: number };
   /** Terrain + staging probe (heights profile, houses, obstacles). */
   stageDebug(): Record<string, unknown>;
+  /** Village mesh material autopsy (palace voxelize debugging). */
+  villageMaterialInfo(): Array<{ array: boolean; groups: number; indexed: boolean }>;
   /** Draw census by scene root — the "what eats the frame" probe. */
   sceneCensus(): Array<{ root: string; meshes: number; visible: number; tris: number }>;
   /** Toggle a composer pass by constructor name (WebKit/Safari debugging). */

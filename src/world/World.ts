@@ -195,8 +195,21 @@ export class World {
     this.villageBounds = null;
     for (const child of this.scene.children) {
       if (!(child.name ?? '').startsWith('village')) continue;
-      const box = new THREE.Box3().setFromObject(child);
-      if (Number.isFinite(box.min.z) && box.min.z !== Infinity) this.villageBounds = box;
+      const box = new THREE.Box3();
+      const meshBox = new THREE.Box3();
+      let valid = false;
+      child.traverse((object) => {
+        const mesh = object as THREE.Mesh;
+        if (!mesh.isMesh || !mesh.geometry) return;
+        if (!mesh.geometry.boundingBox) mesh.geometry.computeBoundingBox();
+        if (!mesh.geometry.boundingBox) return;
+        meshBox.copy(mesh.geometry.boundingBox).applyMatrix4(mesh.matrixWorld);
+        const v = [meshBox.min.x, meshBox.min.y, meshBox.min.z, meshBox.max.x, meshBox.max.y, meshBox.max.z];
+        if (!v.every(Number.isFinite)) return;
+        box.union(meshBox);
+        valid = true;
+      });
+      if (valid) this.villageBounds = box;
     }
 
     this.obstacleBoxes = [];
@@ -251,8 +264,8 @@ export class World {
     ];
     // Fine house cubes; the distant palace runs coarse (it reads at 90m,
     // and its surface area would drown the triangle budget at house scale).
-    const size = this.compact ? 0.3 : 0.2;
-    const palaceSize = this.compact ? 0.55 : 0.45;
+    const size = this.compact ? 0.26 : 0.18;
+    const palaceSize = this.compact ? 0.68 : 0.7;
     const jitterRng = createSeededRandom((seed ^ 0x7ee1) >>> 0);
     // Shared palettes per style (cheoma's own material sharing).
     const palettes = new Map<string, unknown>();
@@ -279,11 +292,28 @@ export class World {
     let palaceData: ReturnType<typeof voxelizeGroup> = null;
     const villageRoot = this.scene.children.find((child) => (child.name ?? '').startsWith('village'));
     if (villageRoot) {
-      palaceData = voxelizeGroup(villageRoot as THREE.Group, palaceSize, jitterRng);
+      // The village group spans the whole mountain (582m) — filter to the
+      // palace compound only, or the grid drowns and the voxelize no-ops
+      // (the silent "궁이 안 부서진다" bug).
+      const palaceGroundY = Number(site.heightAt?.(cx, cz - 110) ?? 5);
+      const palaceFilter = { cx: cx, cz: cz - 110, rx: 58, rz: 42, yMax: palaceGroundY + 22 };
+      palaceData = voxelizeGroup(villageRoot as THREE.Group, palaceSize, jitterRng, palaceFilter);
+      console.info('[palace-voxelize]', palaceData
+        ? `cubes=${palaceData.sx.length} box=${((palaceData.box.max.x - palaceData.box.min.x) || 0).toFixed(0)}x${((palaceData.box.max.y - palaceData.box.min.y) || 0).toFixed(0)}x${((palaceData.box.max.z - palaceData.box.min.z) || 0).toFixed(0)}`
+        : 'NULL');
       if (palaceData) {
         villageRoot.traverse((object) => {
           const mesh = object as THREE.Mesh;
-          if (mesh.isMesh) mesh.visible = false;
+          if (!mesh.isMesh || !mesh.geometry) return;
+          if (!mesh.geometry.boundingBox) mesh.geometry.computeBoundingBox();
+          const bb = mesh.geometry.boundingBox;
+          if (!bb) return;
+          const withinX = Math.max(bb.min.x + mesh.matrixWorld.elements[12], palaceFilter.cx - palaceFilter.rx)
+            <= Math.min(bb.max.x + mesh.matrixWorld.elements[12], palaceFilter.cx + palaceFilter.rx);
+          const withinZ = Math.max(bb.min.z + mesh.matrixWorld.elements[14], palaceFilter.cz - palaceFilter.rz)
+            <= Math.min(bb.max.z + mesh.matrixWorld.elements[14], palaceFilter.cz + palaceFilter.rz);
+          const belowY = bb.min.y + mesh.matrixWorld.elements[13] <= palaceFilter.yMax;
+          if (withinX && withinZ && belowY) mesh.visible = false;
         });
       }
     }
@@ -301,12 +331,60 @@ export class World {
     }
     if (palaceData) {
       const index = this.voxelHouses.addHouse(palaceData, palaceSize);
-      if (index >= 0) this.palaceVoxelIndex = index;
+      if (index >= 0) {
+        this.palaceVoxelIndex = index;
+        this.houses.push({
+          x: (palaceData.box.min.x + palaceData.box.max.x) / 2,
+          z: (palaceData.box.min.z + palaceData.box.max.z) / 2,
+          box: palaceData.box.clone(),
+        });
+      }
     }
   }
 
   /** Voxel index of the palace (special collapse copy) or -1. */
   palaceVoxelIndex = -1;
+
+  /** Autopsy of the village mesh group's bounds (guarded) + voxel grid math. */
+  villageMaterialInfo(): Array<{ array: boolean; groups: number; indexed: boolean; box?: string }> {
+    const root = this.scene.children.find((child) => (child.name ?? '').startsWith('village'));
+    const out: Array<{ array: boolean; groups: number; indexed: boolean; box?: string }> = [];
+    if (root) {
+      const box = new THREE.Box3();
+      const meshBox = new THREE.Box3();
+      let valid = false;
+      let meshes = 0;
+      let poisoned = 0;
+      root.traverse((object) => {
+        const mesh = object as THREE.Mesh;
+        if (!mesh.isMesh || !mesh.geometry) return;
+        meshes += 1;
+        if (!mesh.geometry.boundingBox) mesh.geometry.computeBoundingBox();
+        if (!mesh.geometry.boundingBox) return;
+        meshBox.copy(mesh.geometry.boundingBox).applyMatrix4(mesh.matrixWorld);
+        const v = [meshBox.min.x, meshBox.min.y, meshBox.min.z, meshBox.max.x, meshBox.max.y, meshBox.max.z];
+        if (!v.every(Number.isFinite)) {
+          poisoned += 1;
+          return;
+        }
+        box.union(meshBox);
+        valid = true;
+      });
+      if (valid) {
+        const sx = box.max.x - box.min.x;
+        const sy = box.max.y - box.min.y;
+        const sz = box.max.z - box.min.z;
+        const cells = (size: number) => Math.ceil(sx / size) * Math.ceil(sy / size) * Math.ceil(sz / size);
+        out.push({
+          array: false, groups: 0, indexed: true,
+          box: `${sx.toFixed(0)}x${sy.toFixed(0)}x${sz.toFixed(0)}m meshes=${meshes} poisoned=${poisoned} cells@0.38=${(cells(0.38) / 1e6).toFixed(1)}M @0.5=${(cells(0.5) / 1e6).toFixed(1)}M @0.8=${(cells(0.8) / 1e6).toFixed(1)}M`,
+        });
+      } else {
+        out.push({ array: false, groups: 0, indexed: true, box: 'all-poisoned' });
+      }
+    }
+    return out;
+  }
 
   voxelHouseManager(): VoxelHouses | null {
     return this.voxelHouses;
@@ -314,7 +392,7 @@ export class World {
 
   /** The street's cube size — debris chunks scale with it. */
   voxelSize(): number {
-    return this.compact ? 0.36 : 0.26;
+    return this.compact ? 0.26 : 0.18;
   }
 
   /** Collapse tick — drives the pancake animation, dusts landings. */

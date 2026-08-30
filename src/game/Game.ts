@@ -1879,6 +1879,8 @@ export class Game {
         gateY: this.bunkerGroundY,
         gateZ: this.bunkerZ,
       }),
+      /** Village mesh material autopsy (palace voxelize debugging). */
+      villageMaterialInfo: () => this.world.villageMaterialInfo(),
       /** Draw census by scene root — the "what eats the frame" probe. */
       sceneCensus: () => this.world.sceneCensus(),
       /** Toggle a composer pass by name (WebKit/Safari pipeline debugging). */
@@ -1896,6 +1898,7 @@ export class Game {
         }
         return {
           villageSeed: this.villageSeed,
+          palaceVoxelIndex: this.world.palaceVoxelIndex,
           palace: q.palaceCenter(),
           bunker: {
             x: +this.bunkerX.toFixed(1),
@@ -1937,6 +1940,7 @@ export class Game {
       heat: this.heat,
       spin: this.spin,
       kills: this.kills,
+      rubble: this.rubble ? this.rubble.bodyCount : -2,
       seal: this.sealCharge,
       dawn: this.dawnTimer > 0,
       night: this.nightNumber,

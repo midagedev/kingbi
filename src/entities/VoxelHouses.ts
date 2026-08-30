@@ -56,28 +56,95 @@ export function voxelizeGroup(
   group: THREE.Group,
   size: number,
   jitter: () => number,
+  region?: { cx: number; cz: number; rx: number; rz: number; yMax?: number },
 ): {
   sx: Float32Array; sy: Float32Array; sz: Float32Array;
   sr: Float32Array; sg: Float32Array; sb: Float32Array;
   box: THREE.Box3;
 } | null {
   group.updateMatrixWorld(true);
-  const box = new THREE.Box3().setFromObject(group);
-  if (!Number.isFinite(box.min.x) || box.isEmpty()) return null;
+  // NaN-proof bounds: streamed village meshes can carry poisoned buffers
+  // (a single NaN vertex turns setFromObject into NaN) — accumulate per
+  // mesh and skip anything non-finite.
+  // Region pre-pass: collect only triangles whose centroid lies inside
+  // the palace grounds — merged meshes span the whole mountain, so mesh
+  // centers are useless; centroids are honest.
+  const kept: number[] = [];
+  const keptMat: THREE.Material[] = [];
+  const keptUv: number[] = [];
+  const box = new THREE.Box3();
+  let boxValid = false;
+  const a = new THREE.Vector3();
+  const b = new THREE.Vector3();
+  const c = new THREE.Vector3();
+  {
+    group.traverse((object) => {
+      const mesh = object as THREE.Mesh;
+      if (!mesh.isMesh || !mesh.geometry) return;
+      const material = mesh.material as THREE.Material | THREE.Material[];
+      if (Array.isArray(material)) return;
+      const pos = mesh.geometry.attributes.position;
+      const uvAttr = mesh.geometry.attributes.uv;
+      if (!pos) return;
+      const index = mesh.geometry.index;
+      const faces = (index ? index.count : pos.count) / 3;
+      for (let f = 0; f < faces; f += 1) {
+        for (let v = 0; v < 3; v += 1) {
+          const i = index ? index.getX(f * 3 + v) : f * 3 + v;
+          const vert = v === 0 ? a : v === 1 ? b : c;
+          vert.set(pos.getX(i), pos.getY(i), pos.getZ(i)).applyMatrix4(mesh.matrixWorld);
+        }
+        const mx = (a.x + b.x + c.x) / 3;
+        const mz = (a.z + b.z + c.z) / 3;
+        const my = (a.y + b.y + c.y) / 3;
+        if (region && (Math.abs(mx - region.cx) > region.rx || Math.abs(mz - region.cz) > region.rz)) continue;
+        if (region?.yMax !== undefined && my > region.yMax) continue;
+        if (!Number.isFinite(a.x + a.y + a.z + b.x + b.y + b.z + c.x + c.y + c.z)) continue;
+        kept.push(a.x, a.y, a.z, b.x, b.y, b.z, c.x, c.y, c.z);
+        keptMat.push(material);
+        if (uvAttr) {
+          let fu = 0;
+          let fv = 0;
+          for (let v = 0; v < 3; v += 1) {
+            const i = index ? index.getX(f * 3 + v) : f * 3 + v;
+            fu += uvAttr.getX(i) / 3;
+            fv += uvAttr.getY(i) / 3;
+          }
+          keptUv.push(fu, fv);
+        } else {
+          keptUv.push(0.5, 0.5);
+        }
+        box.expandByPoint(a);
+        box.expandByPoint(b);
+        box.expandByPoint(c);
+        boxValid = true;
+      }
+    });
+  }
+  if (!boxValid || kept.length === 0) {
+    console.info('[voxelize] null: region empty');
+    return null;
+  }
+  if (region) {
+    box.min.x = Math.max(box.min.x, region.cx - region.rx);
+    box.max.x = Math.min(box.max.x, region.cx + region.rx);
+    box.min.z = Math.max(box.min.z, region.cz - region.rz);
+    box.max.z = Math.min(box.max.z, region.cz + region.rz);
+    if (region.yMax !== undefined) box.max.y = Math.min(box.max.y, region.yMax);
+  }
   box.expandByScalar(size * 0.55);
   const nx = Math.max(1, Math.ceil((box.max.x - box.min.x) / size));
   const ny = Math.max(1, Math.ceil((box.max.y - box.min.y) / size));
   const nz = Math.max(1, Math.ceil((box.max.z - box.min.z) / size));
-  if (nx * ny * nz > 2621440) return null;
-
+  if (nx * ny * nz > 6291456) {
+    console.info(`[voxelize] null: grid ${nx}x${ny}x${nz}=${((nx * ny * nz) / 1e6).toFixed(0)}M @${size}`);
+    return null;
+  }
   const colors = new Uint8Array(nx * ny * nz * 3);
   const occupied = new Uint8Array(nx * ny * nz);
   const tri = new THREE.Triangle();
   const cp = new THREE.Vector3();
   const probe = new THREE.Vector3();
-  const a = new THREE.Vector3();
-  const b = new THREE.Vector3();
-  const c = new THREE.Vector3();
   const ab = new THREE.Vector3();
   const ac = new THREE.Vector3();
   const normal = new THREE.Vector3();
@@ -115,69 +182,53 @@ export function voxelizeGroup(
     return faceColor.multiply(texel);
   };
 
-  group.traverse((object) => {
-    const mesh = object as THREE.Mesh;
-    if (!mesh.isMesh || !mesh.geometry) return;
-    const material = mesh.material as THREE.Material | THREE.Material[];
-    if (Array.isArray(material)) return;
-    const pos = mesh.geometry.attributes.position;
-    if (!pos) return;
-    const uvAttr = mesh.geometry.attributes.uv;
-    const index = mesh.geometry.index;
-    const faces = (index ? index.count : pos.count) / 3;
-    for (let f = 0; f < faces; f += 1) {
-      for (let v = 0; v < 3; v += 1) {
-        const i = index ? index.getX(f * 3 + v) : f * 3 + v;
-        const vert = v === 0 ? a : v === 1 ? b : c;
-        vert.set(pos.getX(i), pos.getY(i), pos.getZ(i)).applyMatrix4(mesh.matrixWorld);
-      }
-      tri.set(a, b, c);
-      // Face color: material base × actual map texel (centroid uv), then
-      // moon-lambert shade — flat base colors alone made the cubes glow
-      // and erased all sense of the house's form.
-      let fu = 0.5;
-      let fv = 0.5;
-      if (uvAttr) {
-        for (let v = 0; v < 3; v += 1) {
-          const i = index ? index.getX(f * 3 + v) : f * 3 + v;
-          fu += uvAttr.getX(i) / 3;
-          fv += uvAttr.getY(i) / 3;
-        }
-      }
-      normal.copy(ab.subVectors(c, a)).cross(ac.subVectors(b, a)).normalize();
-      if (normal.lengthSq() < 0.5) continue;
-      const shade = 0.45 + 0.55 * Math.max(0, normal.dot(moon));
-      const color = sampleMaterial(material, fu, fv).multiplyScalar(shade * 0.88);
-      const tx0 = Math.floor((Math.min(a.x, b.x, c.x) - box.min.x) / size) - 1;
-      const tx1 = Math.floor((Math.max(a.x, b.x, c.x) - box.min.x) / size) + 1;
-      const ty0 = Math.floor((Math.min(a.y, b.y, c.y) - box.min.y) / size) - 1;
-      const ty1 = Math.floor((Math.max(a.y, b.y, c.y) - box.min.y) / size) + 1;
-      const tz0 = Math.floor((Math.min(a.z, b.z, c.z) - box.min.z) / size) - 1;
-      const tz1 = Math.floor((Math.max(a.z, b.z, c.z) - box.min.z) / size) + 1;
-      for (let iz = Math.max(0, tz0); iz <= Math.min(nz - 1, tz1); iz += 1) {
-        for (let iy = Math.max(0, ty0); iy <= Math.min(ny - 1, ty1); iy += 1) {
-          for (let ix = Math.max(0, tx0); ix <= Math.min(nx - 1, tx1); ix += 1) {
-            probe.set(
-              box.min.x + (ix + 0.5) * size,
-              box.min.y + (iy + 0.5) * size,
-              box.min.z + (iz + 0.5) * size,
-            );
-            tri.closestPointToPoint(probe, cp);
-            if (probe.distanceToSquared(cp) > reachSq) continue;
-            const cell = ix + iy * nx + iz * nx * ny;
-            occupied[cell] = 1;
-            colors[cell * 3] = Math.min(255, Math.round(color.r * 255));
-            colors[cell * 3 + 1] = Math.min(255, Math.round(color.g * 255));
-            colors[cell * 3 + 2] = Math.min(255, Math.round(color.b * 255));
-          }
+  const faceCount = keptMat.length;
+  for (let f = 0; f < faceCount; f += 1) {
+    a.set(kept[f * 9], kept[f * 9 + 1], kept[f * 9 + 2]);
+    b.set(kept[f * 9 + 3], kept[f * 9 + 4], kept[f * 9 + 5]);
+    c.set(kept[f * 9 + 6], kept[f * 9 + 7], kept[f * 9 + 8]);
+    tri.set(a, b, c);
+    // Face color: material base × actual map texel (centroid uv), then
+    // moon-lambert shade — flat base colors alone made the cubes glow
+    // and erased all sense of the house's form.
+    const fu = keptUv[f * 2];
+    const fv = keptUv[f * 2 + 1];
+    normal.copy(ab.subVectors(c, a)).cross(ac.subVectors(b, a)).normalize();
+    if (normal.lengthSq() < 0.5) continue;
+    const shade = 0.45 + 0.55 * Math.max(0, normal.dot(moon));
+    const color = sampleMaterial(keptMat[f] as THREE.Material, fu, fv).multiplyScalar(shade * 0.88);
+    const tx0 = Math.floor((Math.min(a.x, b.x, c.x) - box.min.x) / size) - 1;
+    const tx1 = Math.floor((Math.max(a.x, b.x, c.x) - box.min.x) / size) + 1;
+    const ty0 = Math.floor((Math.min(a.y, b.y, c.y) - box.min.y) / size) - 1;
+    const ty1 = Math.floor((Math.max(a.y, b.y, c.y) - box.min.y) / size) + 1;
+    const tz0 = Math.floor((Math.min(a.z, b.z, c.z) - box.min.z) / size) - 1;
+    const tz1 = Math.floor((Math.max(a.z, b.z, c.z) - box.min.z) / size) + 1;
+    for (let iz = Math.max(0, tz0); iz <= Math.min(nz - 1, tz1); iz += 1) {
+      for (let iy = Math.max(0, ty0); iy <= Math.min(ny - 1, ty1); iy += 1) {
+        for (let ix = Math.max(0, tx0); ix <= Math.min(nx - 1, tx1); ix += 1) {
+          probe.set(
+            box.min.x + (ix + 0.5) * size,
+            box.min.y + (iy + 0.5) * size,
+            box.min.z + (iz + 0.5) * size,
+          );
+          tri.closestPointToPoint(probe, cp);
+          if (probe.distanceToSquared(cp) > reachSq) continue;
+          const cell = ix + iy * nx + iz * nx * ny;
+          occupied[cell] = 1;
+          colors[cell * 3] = Math.min(255, Math.round(color.r * 255));
+          colors[cell * 3 + 1] = Math.min(255, Math.round(color.g * 255));
+          colors[cell * 3 + 2] = Math.min(255, Math.round(color.b * 255));
         }
       }
     }
-  });
+  }
 
   let total = 0;
   for (let i = 0; i < occupied.length; i += 1) total += occupied[i];
-  if (total === 0) return null;
+  if (total === 0) {
+    console.info('[voxelize] null: zero voxels splatted');
+    return null;
+  }
   const sx = new Float32Array(total);
   const sy = new Float32Array(total);
   const sz = new Float32Array(total);

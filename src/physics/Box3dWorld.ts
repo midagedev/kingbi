@@ -93,6 +93,11 @@ export class Box3dWorld {
     return this.module !== null;
   }
 
+  /** Live rigid-body count from the bridge (QA + the silent-fail probe). */
+  get bodyCount(): number {
+    return this.module?._bx_alive_count?.() ?? -1;
+  }
+
   get capacity(): number {
     return this.slots.length;
   }
