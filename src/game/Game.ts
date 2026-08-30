@@ -247,31 +247,34 @@ export class Game {
     // (배산) looms behind the wall and the horde pours DOWN its slope
     // toward the gun. Camera stands south over the palace roofs looking
     // north: roof foreground, gun mid-frame, mountain river.
-    // 궁궐 마당 center stage — measured twice over, never fixed: the palace
-    // group's TRUE mesh bounds give the courtyard's south edge (proxies are
-    // blind to the merged halls), the terrain scan gives the 배산 cliff base
-    // to the north. The gun stands ~34m out from the halls with a guaranteed
-    // spawn runway to the cliff; the high-angle rig looks DOWN the big yard
-    // so no roof can ever sit in the sightline.
+    // 개활지 최후 진지 — the palace compound is DENSE (halls, walls,
+    // colonnades at every scale) and no single measurement ever sees all
+    // of it: pick-proxies miss the merged halls, mesh bounds miss pieces
+    // that stream in late. Stop measuring the palace and OUT-RANGE it —
+    // the gun stands a fixed 90m south of the palace CENTER (no capital
+    // compound reaches past ~60m) on measured flat ground, so overlap is
+    // impossible by construction. The palace becomes the BACKDROP (already
+    // fallen: the horde pours OUT of it toward the last gun in the field)
+    // with the 배산 rising behind it.
     const h = queries.heightAt;
     this.spawnFar = 27;
     if (palace) {
-      const baseY = h(palace.x, palace.z - 40);
-      let cliffOff = 120;
-      for (let off = 45; off <= 120; off += 3) {
-        if (h(palace.x, palace.z - off) - baseY > 1.6) {
-          cliffOff = off;
-          break;
+      this.bunkerX = palace.x;
+      // Flattest candidate row in the open field south of the compound.
+      let bestZ = palace.z + 90;
+      let bestScore = Infinity;
+      for (const off of [78, 86, 94, 102, 110]) {
+        const z = palace.z + off;
+        let score = 0;
+        for (const [ox, oz] of [[0, 0], [24, 0], [-24, 0], [0, 26], [0, -26], [16, 14], [-16, -14]] as const) {
+          score = Math.max(score, Math.abs(h(palace.x + ox, z + oz) - h(palace.x, z)));
+        }
+        if (score < bestScore) {
+          bestScore = score;
+          bestZ = z;
         }
       }
-      const cliffZ = palace.z - cliffOff;
-      const edgeZ = this.world.palaceBounds()?.northZ ?? palace.z - 20;
-      // 26m of courtyard in front of the halls — the yard breathes around
-      // the gun (walls/roofs read as the far rim, not a close cage); at
-      // least 16m of spawn runway to the cliff when the yard runs tight.
-      this.bunkerZ = Math.max(edgeZ - 26, cliffZ + 16);
-      this.bunkerX = palace.x;
-      this.spawnFar = Math.max(15, Math.min(27, this.bunkerZ - cliffZ - 5));
+      this.bunkerZ = bestZ;
     } else {
       this.bunkerX = 0;
       this.bunkerZ = -60;

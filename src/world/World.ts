@@ -660,9 +660,13 @@ export class World {
   private villageBounds: THREE.Box3 | null = null;
 
   /** The palace's real north edge + roof line — the staging ground truth. */
-  palaceBounds(): { northZ: number; roofY: number } | null {
+  palaceBounds(): { northZ: number; southZ: number; roofY: number } | null {
     return this.villageBounds
-      ? { northZ: this.villageBounds.min.z, roofY: this.villageBounds.max.y }
+      ? {
+          northZ: this.villageBounds.min.z,
+          southZ: this.villageBounds.max.z,
+          roofY: this.villageBounds.max.y,
+        }
       : null;
   }
 
