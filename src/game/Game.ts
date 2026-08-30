@@ -1272,7 +1272,6 @@ export class Game {
     // wreckage, a warm spill across the yard, and every 원귀 near the
     // fire drags a long shadow away from it.
     this.fires?.ignite(center.x, center.y, center.z, isPalace ? 1.7 : 1, () => this.rng());
-    this.hud.stamp('崩', isPalace ? '궁이 무너진다' : '집이 무너진다');
     this.shakeTrauma = Math.min(1, this.shakeTrauma + 0.5);
     this.fovPunch = Math.min(1.4, this.fovPunch + 0.6);
     this.world.impactAberration(1.4);
@@ -1558,6 +1557,34 @@ export class Game {
     this.sealStampLock -= delta;
     this.woodSfxTimer -= delta;
     this.collapseDustTimer -= delta;
+    // 지지 끊김 — support scans run inside the voxel tick; the severed
+    // islands (a roof whose walls were shot out) drain here as rigid
+    // chunks and rain down. The last bullet of a burst still counts: the
+    // schedule lives in update, not in the fire path.
+    this.chewScratch.length = 0;
+    if (this.world.voxelHouseManager()?.drainDetachedVoxels(this.chewScratch) && this.rubble?.ready) {
+      for (const cube of this.chewScratch) {
+        this.rubble.spawnRubble(
+          cube.x + (this.rng() - 0.5) * cube.s * 0.4, cube.y, cube.z + (this.rng() - 0.5) * cube.s * 0.4,
+          cube.s * 0.5 * (0.6 + this.rng() * 0.2), cube.r, cube.g, cube.b,
+          (this.rng() - 0.5) * 2.4, -0.6 - this.rng() * 2.2, (this.rng() - 0.5) * 2.4,
+          (this.rng() - 0.5) * 7, (this.rng() - 0.5) * 7, (this.rng() - 0.5) * 7,
+        );
+      }
+      const first = this.chewScratch[0];
+      this.vfx.demolitionDust(first.x, first.y + 0.8, first.z, 10, () => this.rng());
+      this.shakeTrauma = Math.min(1, this.shakeTrauma + 0.06);
+    }
+    // A detachment can push a house past the structure threshold with no
+    // bullet involved — sweep it here so the pancake follows the rain.
+    {
+      const vox = this.world.voxelHouseManager();
+      if (vox) {
+        for (let i = 0; i < vox.houseCount; i += 1) {
+          if (!vox.isCollapsed(i) && vox.aliveRatio(i) < 0.78) this.collapseHouse(i);
+        }
+      }
+    }
     this.world.updateVoxelHouses(delta, (x, y, z) => {
       if (this.collapseDustTimer > 0) return;
       this.collapseDustTimer = 0.18;

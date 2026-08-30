@@ -14,6 +14,9 @@ import * as THREE from 'three';
 
 /** 창호지 window-pane budget across all houses + the palace. */
 const GLOW_CAPACITY = 512;
+/** Rigid-chunk cap for one detachment event (the whole island still goes;
+ *  the cap only bounds the rigid-body rain — stress bought 3fps at 480). */
+const DETACHED_QUEUE_MAX = 240;
 
 interface HouseVoxels {
   index: number;
@@ -45,6 +48,10 @@ interface HouseVoxels {
   fallVy: Float32Array | null;
   fallVz: Float32Array | null;
   fallY: Float32Array | null;
+  /** Support-scan scratch (grounded-connectivity) — cached per house. */
+  supportSeen: Uint8Array | null;
+  lastSupportScan: number;
+  lastScanAlive: number;
 }
 
 export interface ChewedVoxel {
@@ -373,6 +380,10 @@ export class VoxelHouses {
   private readonly glowOffZ = new Float32Array(GLOW_CAPACITY);
   private glowTime = 0;
   private glowTick = 0;
+  /** Shared clock for the per-house support-scan throttle. */
+  private voxTime = 0;
+  /** Visual chunks waiting for the physics layer (support detachments). */
+  private readonly detachedQueue: ChewedVoxel[] = [];
 
   constructor(scene: THREE.Scene, capacity: number) {
     const geometry = new THREE.BoxGeometry(1, 1, 1);
@@ -423,6 +434,7 @@ export class VoxelHouses {
       originZ: data.box.min.z,
       glowCells: new Int32Array(count).fill(-1),
       fallDelay: null, fallVx: null, fallVy: null, fallVz: null, fallY: null,
+      supportSeen: null, lastSupportScan: -1, lastScanAlive: -1,
     };
     this.houses.push(house);
     for (let i = 0; i < count; i += 1) {
@@ -766,6 +778,96 @@ export class VoxelHouses {
     return (house ? house.size : 0.4) * 0.5;
   }
 
+  /** 지지 검사 — a roof whose walls were shot out must not hover: flood
+   *  occupied cells up from the grounded bottom layers (6-connectivity)
+   *  and DETACH every unsupported island, top-down so the roof rains
+   *  first. Scheduled from update() (so the LAST bullet of a burst still
+   *  gets its scan), throttled per house, skipped while nothing changed.
+   *  Detached chunks queue for the caller — drainDetachedVoxels(). */
+  private scanSupport(house: HouseVoxels): void {
+    if (house.collapsed || house.fallDelay) return;
+    if (house.alive === house.count) return;
+    if (house.lastScanAlive === house.alive) return;
+    if (this.voxTime - house.lastSupportScan < 0.3) return;
+    house.lastSupportScan = this.voxTime;
+    const { nx, ny, nz } = house;
+    const cellSlot = house.cellSlot;
+    const total = nx * ny * nz;
+    if (!house.supportSeen || house.supportSeen.length !== total) {
+      house.supportSeen = new Uint8Array(total);
+    }
+    const seen = house.supportSeen;
+    seen.fill(0);
+    // Seed: occupied cells resting on the grid floor (the podium base).
+    const stack: number[] = [];
+    const seedLayers = Math.min(2, ny);
+    for (let iz = 0; iz < nz; iz += 1) {
+      for (let iy = 0; iy < seedLayers; iy += 1) {
+        for (let ix = 0; ix < nx; ix += 1) {
+          const cell = ix + iy * nx + iz * nx * ny;
+          if (cellSlot[cell] !== 0) {
+            seen[cell] = 1;
+            stack.push(cell);
+          }
+        }
+      }
+    }
+    const layerYZ = nx;
+    const planeYZ = nx * ny;
+    while (stack.length > 0) {
+      const cell = stack.pop()!;
+      const ix = cell % nx;
+      const iy = ((cell / nx) | 0) % ny;
+      const iz = (cell / planeYZ) | 0;
+      const push = (candidate: number) => {
+        if (seen[candidate] || cellSlot[candidate] === 0) return;
+        seen[candidate] = 1;
+        stack.push(candidate);
+      };
+      if (ix > 0) push(cell - 1);
+      if (ix < nx - 1) push(cell + 1);
+      if (iy > 0) push(cell - layerYZ);
+      if (iy < ny - 1) push(cell + layerYZ);
+      if (iz > 0) push(cell - planeYZ);
+      if (iz < nz - 1) push(cell + planeYZ);
+    }
+    // Unsupported islands — occupied cells the ground never reaches.
+    const floating: number[] = [];
+    for (let cell = 0; cell < total; cell += 1) {
+      if (seen[cell] === 0 && cellSlot[cell] !== 0) floating.push(cell);
+    }
+    house.lastScanAlive = house.alive;
+    if (floating.length === 0) return;
+    // Top-down: the highest cells let go first and the roof rains.
+    const byHeight = floating
+      .map((cell) => ({ cell, y: house.sy[cellSlot[cell] - 1] }))
+      .sort((a, b) => b.y - a.y);
+    let removed = 0;
+    for (const { cell } of byHeight) {
+      const i = cellSlot[cell] - 1;
+      cellSlot[cell] = 0;
+      house.alive -= 1;
+      this.killSlot(house.slots[i]);
+      this.killGlowCell(house, i);
+      if (this.detachedQueue.length < DETACHED_QUEUE_MAX) {
+        this.detachedQueue.push({ x: house.sx[i], y: house.sy[i], z: house.sz[i], r: house.sr[i], g: house.sg[i], b: house.sb[i], s: house.size });
+      }
+      removed += 1;
+    }
+    if (removed > 0) this.flush();
+    house.lastScanAlive = house.alive;
+  }
+
+  /** Rigid chunks waiting from support scans — the Game layer drains
+   *  these into box3d rubble every frame. */
+  drainDetachedVoxels(out: ChewedVoxel[]): number {
+    if (this.detachedQueue.length === 0) return 0;
+    for (const cube of this.detachedQueue) out.push(cube);
+    const count = this.detachedQueue.length;
+    this.detachedQueue.length = 0;
+    return count;
+  }
+
   aliveRatio(index: number): number {
     const house = this.houses[index];
     return house ? house.alive / house.count : 0;
@@ -826,6 +928,8 @@ export class VoxelHouses {
 
   /** Collapse animation tick — returns landed-cube positions for dust. */
   update(delta: number, onLand: (x: number, y: number, z: number) => void): void {
+    this.voxTime += delta;
+    for (const house of this.houses) this.scanSupport(house);
     let dirty = false;
     for (const house of this.houses) {
       const fallDelay = house.fallDelay;
@@ -894,6 +998,8 @@ export class VoxelHouses {
       house.fallVy = null;
       house.fallVz = null;
       house.fallY = null;
+      house.lastSupportScan = -1;
+      house.lastScanAlive = -1;
       house.cellSlot.fill(0);
       for (let i = 0; i < house.count; i += 1) {
         house.slots[i] = slot + i;
