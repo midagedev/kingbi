@@ -40,7 +40,7 @@ interface FlameRow {
 
 const MAX_FIRES = 8;
 const MAX_FLAME_ROWS = 110;
-const MAX_SHADOWS = 192;
+const MAX_SHADOWS = 320;
 
 /** Vertical alpha ramp for the streak: opaque at the feet (v0), gone at
  *  the tip — a stretched soft shadow, not a black plank. */
@@ -100,8 +100,12 @@ export class FireField {
   private readonly glowTexture: THREE.Texture;
   private readonly streakTexture: THREE.Texture;
   private readonly shadowMesh: THREE.InstancedMesh;
-  /** Desktop-only shared warm light, following the nearest fire. */
-  private readonly light: THREE.PointLight | null;
+  /** Desktop-only warm spot over the nearest fire — the ONE light with a
+   *  real shadow map: the burning house, marching 원귀 and the corpse
+   *  heaps all cast true shadows radiating away from the flames. Other
+   *  lights (secondary fires, lanterns) cast via the streak system. */
+  private readonly light: THREE.SpotLight | null;
+  private readonly lightTarget: THREE.Object3D | null;
   private readonly matrix = new THREE.Matrix4();
   private readonly pos = new THREE.Vector3();
   private readonly quat = new THREE.Quaternion();
@@ -109,6 +113,7 @@ export class FireField {
   private readonly scale = new THREE.Vector3();
   private readonly color = new THREE.Color();
   private time = 0;
+  private shadowFrame = 0;
 
   constructor(scene: THREE.Scene, compact: boolean, focusX: number, focusZ: number) {
     const flameGeometry = new THREE.BoxGeometry(1, 1, 1);
@@ -138,10 +143,21 @@ export class FireField {
     this.shadowMesh.name = 'fire-shadows';
     scene.add(this.shadowMesh);
 
-    this.light = compact ? null : new THREE.PointLight(0xff8a3c, 0, 30, 2);
+    this.light = compact ? null : new THREE.SpotLight(0xff8a3c, 0, 34, 1.15, 0.6, 2);
     if (this.light) {
-      this.light.position.set(focusX, 4, focusZ);
-      scene.add(this.light);
+      this.light.position.set(focusX, 9, focusZ);
+      this.light.castShadow = true;
+      this.light.shadow.autoUpdate = false; // toggled every other frame below
+      this.light.shadow.mapSize.set(1024, 1024);
+      this.light.shadow.camera.near = 2;
+      this.light.shadow.camera.far = 34;
+      this.light.shadow.bias = -0.0008;
+      this.light.shadow.normalBias = 0.04;
+      this.lightTarget = new THREE.Object3D();
+      this.light.target = this.lightTarget;
+      scene.add(this.light, this.lightTarget);
+    } else {
+      this.lightTarget = null;
     }
   }
 
@@ -296,10 +312,19 @@ export class FireField {
           best = fire;
         }
       }
-      if (best) {
+      if (best && this.lightTarget) {
+        // Half-rate shadow refresh (30fps): the voxel-house vertex load in
+        // the shadow pass is the price of real fire shadows — halved here,
+        // imperceptible at night.
+        this.shadowFrame += 1;
+        this.light.shadow.needsUpdate = (this.shadowFrame & 1) === 0;
         const flicker = 0.85 + 0.15 * Math.sin(this.time * 7.7) * Math.sin(this.time * 3.1);
-        this.light.position.lerp(this.pos.set(best.x, best.y + 1.4 + best.scale * 0.8, best.z), Math.min(1, delta * 4));
-        this.light.intensity = (2.4 + 1.6 * best.scale) * flicker;
+        // The spot rides high above the flames: wide cone, shadows radiate
+        // outward from the fire across the whole glow pool.
+        this.light.position.lerp(this.pos.set(best.x, best.y + 7.5 + best.scale * 1.5, best.z), Math.min(1, delta * 4));
+        this.lightTarget.position.lerp(this.pos.set(best.x, best.y + 0.6, best.z), Math.min(1, delta * 4));
+        this.lightTarget.updateMatrixWorld();
+        this.light.intensity = (13 + 9 * best.scale) * flicker;
       } else {
         this.light.intensity = 0;
       }
@@ -332,13 +357,18 @@ export class FireField {
     return popped;
   }
 
-  /** Long zombie shadows: every active 원귀 near a fire drags a tapered
-   *  streak across the ground, pointing AWAY from the flames. */
+  /** 광원마다 그림자 — every active 원귀 casts a tapered streak PER nearby
+   *  light, pointing away from it: up to the two strongest sources (the
+   *  secondary streak reads weaker — shorter and thinner), fires joined by
+   *  the yard lanterns as steady weak sources. The nearest fire ALSO gets
+   *  real shadow-mapped light (see the spot above); the streaks cover
+   *  every other light at zero per-light cost. */
   updateShadows(
     eachZombie: (visit: (x: number, z: number, state: string, type: string) => void) => void,
     groundAt: (x: number, z: number) => number,
+    staticSources: Array<{ x: number; z: number }> = [],
   ): void {
-    if (this.fires.length === 0) {
+    if (this.fires.length === 0 && staticSources.length === 0) {
       if (this.shadowMesh.count !== 0) this.shadowMesh.count = 0;
       return;
     }
@@ -348,35 +378,52 @@ export class FireField {
       if (state === 'dormant') return;
       scratch.push({ x, z, type });
     });
+    interface Source { x: number; z: number; radius: number; power: number }
+    const sources: Source[] = [];
+    for (const fire of this.fires) {
+      sources.push({
+        x: fire.x, z: fire.z,
+        radius: (9 + 5 * fire.scale) * 1.45,
+        power: (fire.fade >= 0 ? Math.max(0, 1 - fire.fade / 2.6) : 1) * (0.7 + 0.3 * fire.scale),
+      });
+    }
+    for (const lantern of staticSources) {
+      sources.push({ x: lantern.x, z: lantern.z, radius: 6.5, power: 0.42 });
+    }
     for (const zombie of scratch) {
-      if (written >= MAX_SHADOWS) break;
-      let best: Fire | null = null;
+      let best: Source | null = null;
       let bestScore = 0;
-      for (const fire of this.fires) {
-        const dx = zombie.x - fire.x;
-        const dz = zombie.z - fire.z;
+      let second: Source | null = null;
+      let secondScore = 0;
+      for (const source of sources) {
+        const dx = zombie.x - source.x;
+        const dz = zombie.z - source.z;
         const d = Math.hypot(dx, dz);
-        const radius = (9 + 5 * fire.scale) * 1.45;
-        if (d > radius || d < 0.001) continue;
-        const score = (1 - d / radius) * (fire.fade >= 0 ? Math.max(0, 1 - fire.fade / 2.6) : 1);
+        if (d > source.radius || d < 0.001) continue;
+        const score = (1 - d / source.radius) * source.power;
         if (score > bestScore) {
-          bestScore = score;
-          best = fire;
+          second = best; secondScore = bestScore;
+          best = source; bestScore = score;
+        } else if (score > secondScore) {
+          second = source; secondScore = score;
         }
       }
-      if (!best) continue;
-      const dx = zombie.x - best.x;
-      const dz = zombie.z - best.z;
-      const d = Math.hypot(dx, dz) || 1;
-      const dirX = dx / d;
-      const dirZ = dz / d;
-      const length = Math.min(9, 1.6 + (1 - d / ((9 + 5 * best.scale) * 1.45)) * (5.0 + 4.0 * best.scale));
-      const width = zombie.type === 'brute' ? 1.1 : zombie.type === 'bloater' ? 0.9 : 0.62;
-      this.euler.set(-Math.PI / 2, Math.atan2(-dirX, -dirZ), 0);
-      this.pos.set(zombie.x + dirX * (length * 0.5 + 0.25), groundAt(zombie.x, zombie.z) + 0.03, zombie.z + dirZ * (length * 0.5 + 0.25));
-      this.matrix.compose(this.pos, this.quat.setFromEuler(this.euler), this.scale.set(width, length, 1));
-      this.shadowMesh.setMatrixAt(written, this.matrix);
-      written += 1;
+      for (const [source, weight] of [[best, 1], [second, 0.62]] as Array<[Source | null, number]>) {
+        if (!source || written >= MAX_SHADOWS) continue;
+        const dx = zombie.x - source.x;
+        const dz = zombie.z - source.z;
+        const d = Math.hypot(dx, dz) || 1;
+        const dirX = dx / d;
+        const dirZ = dz / d;
+        const length = Math.min(9, (1.6 + (1 - d / source.radius) * (5.0 + 4.0 * source.power)) * weight);
+        const baseWidth = zombie.type === 'brute' ? 1.1 : zombie.type === 'bloater' ? 0.9 : 0.62;
+        const width = baseWidth * (0.72 + 0.28 * weight);
+        this.euler.set(-Math.PI / 2, Math.atan2(-dirX, -dirZ), 0);
+        this.pos.set(zombie.x + dirX * (length * 0.5 + 0.25), groundAt(zombie.x, zombie.z) + 0.03, zombie.z + dirZ * (length * 0.5 + 0.25));
+        this.matrix.compose(this.pos, this.quat.setFromEuler(this.euler), this.scale.set(width, length, 1));
+        this.shadowMesh.setMatrixAt(written, this.matrix);
+        written += 1;
+      }
     }
     this.shadowMesh.count = written;
     if (written > 0) this.shadowMesh.instanceMatrix.needsUpdate = true;

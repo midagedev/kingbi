@@ -1561,7 +1561,7 @@ export class Game {
     this.physMs = this.physMs * 0.9 + (performance.now() - physT0) * 0.1;
     this.bloodYard?.update(delta);
     this.fires?.update(delta, this.bunkerX, this.bunkerZ);
-    this.fires?.updateShadows((visit) => this.horde.forEachActive(visit), groundAt);
+    this.fires?.updateShadows((visit) => this.horde.forEachActive(visit), groundAt, this.world.yardLanternSpots());
     this.impactSfxTimer -= delta;
     this.splatSfxTimer -= delta;
     this.clankSfxTimer -= delta;

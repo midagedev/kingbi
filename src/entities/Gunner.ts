@@ -93,7 +93,7 @@ export class Gunner {
 
     const track = (mesh: THREE.Mesh) => {
       this.geometries.push(mesh.geometry);
-      mesh.castShadow = true;
+      mesh.castShadow = false; // moon map is cached statics-only
       mesh.receiveShadow = true;
       return mesh;
     };

@@ -147,7 +147,9 @@ export class Horde {
 
     const makePart = (geometry: THREE.BufferGeometry, name: string) => {
       const mesh = new THREE.InstancedMesh(geometry, bodyMat, capacity);
-      mesh.castShadow = true;
+      // No moon-map casting: dynamic casters would force a per-frame
+      // 4096 shadow render. 원귀 shadows come from the FIRE spot instead.
+      mesh.castShadow = false;
       mesh.frustumCulled = false;
       mesh.count = 0;
       mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
@@ -195,7 +197,7 @@ export class Horde {
     const shieldGeo = new THREE.BoxGeometry(0.72, 1.05, 0.09);
     const shieldMat = new THREE.MeshStandardMaterial({ color: 0x6a523c, roughness: 0.85 });
     this.shieldMesh = new THREE.InstancedMesh(shieldGeo, shieldMat, Math.min(96, capacity));
-    this.shieldMesh.castShadow = true;
+    this.shieldMesh.castShadow = false;
     this.shieldMesh.frustumCulled = false;
     this.shieldMesh.count = 0;
     this.shieldMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
@@ -211,7 +213,7 @@ export class Horde {
       roughness: 0.9,
     });
     this.fistMesh = new THREE.InstancedMesh(fistGeo, fistMat, Math.min(64, capacity * 2));
-    this.fistMesh.castShadow = true;
+    this.fistMesh.castShadow = false;
     this.fistMesh.frustumCulled = false;
     this.fistMesh.count = 0;
     this.fistMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);

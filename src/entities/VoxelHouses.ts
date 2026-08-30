@@ -390,6 +390,7 @@ export class VoxelHouses {
     const material = new THREE.MeshStandardMaterial({ roughness: 1, metalness: 0, envMapIntensity: 0.7 });
     this.mesh = new THREE.InstancedMesh(geometry, material, capacity);
     this.mesh.frustumCulled = false;
+    this.mesh.castShadow = true;
     this.mesh.receiveShadow = true;
     this.mesh.name = 'voxel-houses';
     this.mesh.count = 0;
@@ -889,6 +890,13 @@ export class VoxelHouses {
 
   get houseCount(): number {
     return this.houses.length;
+  }
+
+  /** Alive cells across all houses — the moon-shadow cache's change signal. */
+  get totalAlive(): number {
+    let total = 0;
+    for (const house of this.houses) total += house.alive;
+    return total;
   }
 
   isCollapsed(index: number): boolean {

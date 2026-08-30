@@ -111,6 +111,11 @@ export class World {
     this.sun.shadow.camera.far = 260;
     this.sun.shadow.bias = -0.0001;
     this.sun.shadow.normalBias = 0.05;
+    // Cached moon shadows: every dynamic caster (horde, gibs, gunner) is
+    // castShadow-off, so the moon map only re-renders when the statics
+    // change (village rebuild, voxel chew/collapse) — a per-frame 4096²
+    // scene render bought back for the fire spot's real shadows.
+    this.sun.shadow.autoUpdate = false;
     this.scene.add(this.sun);
 
     this.hemi = new THREE.HemisphereLight(0xbdd0e4, 0x8a7a63, 0.9);
@@ -247,6 +252,11 @@ export class World {
    *  the light reads as if it spills (real PointLights cost ~8fps a pair
    *  in per-pixel light math across every standard surface). */
   private yardLanterns: THREE.Group[] = [];
+  /** Lantern ground spots (weak static shadow/glow sources for FireField). */
+  private yardLanternSpotsList: Array<{ x: number; z: number }> = [];
+  /** Moon-map staleness + last-seen voxel census (cache invalidation). */
+  private shadowStale = true;
+  private lastShadowAlive = -1;
   private yardFlames: THREE.Mesh[] = [];
   private yardPools: THREE.Mesh[] = [];
   private lanternTime = 0;
@@ -284,6 +294,7 @@ export class World {
     const stone = new THREE.MeshStandardMaterial({ color: 0x4a474e, roughness: 0.95 });
     const flameMat = new THREE.MeshBasicMaterial({ color: 0xffc06a, toneMapped: false });
     const glowTexture = this.buildLanternGlowTexture();
+    this.yardLanternSpotsList = spots.map(([x, z]) => ({ x, z }));
     spots.forEach(([x, z, poolSize], i) => {
       const ground = queries.heightAt(x, z);
       const group = new THREE.Group();
@@ -343,6 +354,12 @@ export class World {
     this.yardPools = [];
   }
 
+  /** Ground spots of the yard lanterns — weak light sources for the
+   *  shadow-streak system (every light casts, per the reality rule). */
+  yardLanternSpots(): Array<{ x: number; z: number }> {
+    return this.yardLanternSpotsList;
+  }
+
   /** Candle-flicker for the yard lanterns (deterministic in game time). */
   updateYardLanterns(delta: number): void {
     if (this.yardFlames.length === 0) return;
@@ -360,6 +377,7 @@ export class World {
 
   /** Run restart: all cubes back in place, footprints whole. */
   resetYardHouses(): void {
+    this.shadowStale = true;
     this.voxelHouses?.reset();
     this.obstacleBoxes = this.houses.map((house) => house.box.clone());
   }
@@ -529,6 +547,7 @@ export class World {
         });
       }
     }
+    this.shadowStale = true;
   }
 
   /** Voxel index of the palace (special collapse copy) or -1. */
@@ -1042,6 +1061,15 @@ export class World {
   private targetExposure = 1.05;
 
   update(delta: number): void {
+    // Cached moon map: re-render only when the casting statics changed
+    // (village rebuild flagged via shadowStale; voxel chew/collapse shifts
+    // the census). Dynamic casters are off, so this is the whole truth.
+    const voxelCensus = this.voxelHouses?.totalAlive ?? -1;
+    if (this.shadowStale || voxelCensus !== this.lastShadowAlive) {
+      this.sun.shadow.needsUpdate = true;
+      this.shadowStale = false;
+      this.lastShadowAlive = voxelCensus;
+    }
     this.env?.update?.(delta);
     this.post?.update?.(delta);
     if (this.noirPass) {

@@ -54,7 +54,7 @@ export class DebrisPool {
     const geo = new THREE.BoxGeometry(1, 1, 1);
     const mat = new THREE.MeshStandardMaterial({ roughness: 0.92, metalness: 0 });
     this.mesh = new THREE.InstancedMesh(geo, mat, capacity);
-    this.mesh.castShadow = true;
+    this.mesh.castShadow = false; // moon map is cached statics-only
     this.mesh.frustumCulled = false;
     this.mesh.count = 0;
     this.mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
