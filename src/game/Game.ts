@@ -266,10 +266,10 @@ export class Game {
       }
       const cliffZ = palace.z - cliffOff;
       const edgeZ = this.world.palaceBounds()?.northZ ?? palace.z - 20;
-      // 22m of courtyard in front of the halls — the camera rig then sits
-      // just past the roofs looking down the yard; at least 18m of spawn
-      // runway to the cliff when the yard runs tight.
-      this.bunkerZ = Math.max(edgeZ - 22, cliffZ + 18);
+      // 26m of courtyard in front of the halls — the yard breathes around
+      // the gun (walls/roofs read as the far rim, not a close cage); at
+      // least 16m of spawn runway to the cliff when the yard runs tight.
+      this.bunkerZ = Math.max(edgeZ - 26, cliffZ + 16);
       this.bunkerX = palace.x;
       this.spawnFar = Math.max(15, Math.min(27, this.bunkerZ - cliffZ - 5));
     } else {
@@ -808,11 +808,11 @@ export class Game {
     // aim with a deadzone — sweep the pointer to an edge to look around the
     // ring; recentre to settle. D = orbit radius, H = eye height.
     // 모바일 중심 세로형 단일 구성 + 고앵글: the phone lens is THE lens —
-    // desktop letterboxes the same column. High over the big courtyard
-    // (pitch ≈ 55°): houses read as rooftops flanking the lane, the horde
-    // fills the yard, nothing can occlude. Horizontal-FOV anchored so the
-    // lane width is constant across devices.
-    const qv = { dist: 26, height: 38, lookAhead: 2, fov: 0, hFov: 42 };
+    // desktop letterboxes the same column. High over the big courtyard:
+    // hFov 36 zooms the yard in a step (the flanking rooftops sit at the
+    // frame RIM, the yard reads spacious), lookAhead 10 drops the gun to
+    // the lower third while the lane fills the middle of the frame.
+    const qv = { dist: 26, height: 38, lookAhead: 10, fov: 0, hFov: 36 };
     let baseFov = 40;
     {
       const aspect = Math.max(0.5, Math.min(2.2, this.canvas.clientWidth / Math.max(1, this.canvas.clientHeight)));

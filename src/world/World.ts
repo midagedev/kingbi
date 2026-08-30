@@ -281,10 +281,10 @@ export class World {
     // corner swing into the sightline); the far pair's half-diagonal
     // (~12m) still clears the lane by 2m+.
     const specs = [
-      { style: 'giwa' as const, dx: -19, dz: -12, rot: 0 },
-      { style: 'choga' as const, dx: 19, dz: -15, rot: 0 },
-      { style: 'choga' as const, dx: -21, dz: -22, rot: 2.6 },
-      { style: 'giwa' as const, dx: 21, dz: -24, rot: -2.6 },
+      { style: 'giwa' as const, dx: -19, dz: -10, rot: 0 },
+      { style: 'choga' as const, dx: 19, dz: -12, rot: 0 },
+      { style: 'choga' as const, dx: -21, dz: -16, rot: 2.6 },
+      { style: 'giwa' as const, dx: 21, dz: -18, rot: -2.6 },
     ];
     // Shared palettes per style: same-material houses merge into the same
     // draw buckets and the whole street costs ~2× the one-house material
