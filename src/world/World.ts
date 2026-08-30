@@ -264,17 +264,17 @@ export class World {
     this.disposeYardHouses();
     const site = this.village?.plan.site;
     if (!site) return;
-    // A village street that FRAMES the fight, never hides it: the action
-    // band is the spawn ring 14-27m north of the gun, so the houses stand
-    // OUTSIDE it — near pair ±15m, far pair ±19m — leaving the central lane
-    // ±10m fully open (the camera's ±12° core view reaches the houses at
-    // 13-19°, street-edge framing like a 마을 골목, occluding nothing the
-    // gun needs to see).
+    // A WIDE street for the single portrait composition: a 3-bay giwa is
+    // 14-17m across (podium + eaves), so near pairs stand at ±19 (inner
+    // wall ≥11m out — inside the portrait lens edge, OUT of the lane),
+    // far pairs at ±21. Near pairs face the lane dead-on (rot 0 — no
+    // corner swing into the sightline); the far pair's half-diagonal
+    // (~12m) still clears the lane by 2m+.
     const specs = [
-      { style: 'giwa' as const, dx: -15, dz: -13, rot: 0.5 },
-      { style: 'choga' as const, dx: 15, dz: -15, rot: -0.7 },
-      { style: 'choga' as const, dx: -19, dz: -24, rot: 2.8 },
-      { style: 'giwa' as const, dx: 19, dz: -26, rot: -2.4 },
+      { style: 'giwa' as const, dx: -19, dz: -12, rot: 0 },
+      { style: 'choga' as const, dx: 19, dz: -15, rot: 0 },
+      { style: 'choga' as const, dx: -21, dz: -22, rot: 2.6 },
+      { style: 'giwa' as const, dx: 21, dz: -24, rot: -2.6 },
     ];
     // Shared palettes per style: same-material houses merge into the same
     // draw buckets and the whole street costs ~2× the one-house material

@@ -20,16 +20,27 @@
 }
 
 html,
-body,
-#app {
+body {
   width: 100%;
   height: 100%;
   margin: 0;
   overflow: hidden;
-  background: var(--night);
+  background: #000;
   color: var(--paper);
   font-family: "Apple SD Gothic Neo", "Nanum Myeongjo", "Avenir Next", system-ui, sans-serif;
   user-select: none;
+}
+
+/* 모바일 중심 세로형 단일 구성: the stage is a phone-shaped column on every
+ * device — desktop just letterboxes it left/right. One composition to tune
+ * (camera rig, house street, HUD stack), phones fill edge to edge. */
+#app {
+  position: relative;
+  width: min(100vw, calc(100dvh * 9 / 19));
+  height: 100dvh;
+  margin: 0 auto;
+  overflow: hidden;
+  background: var(--night);
 }
 
 canvas {
@@ -53,7 +64,7 @@ canvas {
 
 /* ── HUD ─────────────────────────────────────────────────────────── */
 #hud {
-  position: fixed;
+  position: absolute;
   inset: 0;
   pointer-events: none;
   transition: opacity 0.4s ease;
@@ -263,7 +274,7 @@ canvas {
 /* ── Title / end screens ─────────────────────────────────────────── */
 #title-screen,
 #end-screen {
-  position: fixed;
+  position: absolute;
   inset: 0;
   display: flex;
   align-items: center;
@@ -401,7 +412,7 @@ canvas {
 
 /* ── Upgrades ────────────────────────────────────────────────────── */
 #upgrade-overlay {
-  position: fixed;
+  position: absolute;
   inset: 0;
   display: flex;
   align-items: center;
@@ -509,7 +520,7 @@ canvas {
 
 /* ── Toast ───────────────────────────────────────────────────────── */
 #toast {
-  position: fixed;
+  position: absolute;
   left: 50%;
   bottom: max(96px, calc(env(safe-area-inset-bottom) + 84px));
   transform: translate(-50%, 12px);
@@ -618,7 +629,7 @@ canvas {
 
 /* Brush-stamp slam — Persona-kinetic typography on a Joseon seal. */
 #stamp {
-  position: fixed;
+  position: absolute;
   left: 50%;
   top: 40%;
   transform: translate(-50%, -50%);
@@ -664,7 +675,7 @@ canvas {
 
 /* Combo rank — escalating stylish-action grade. */
 #rank-layer {
-  position: fixed;
+  position: absolute;
   right: max(26px, env(safe-area-inset-right));
   top: max(96px, calc(env(safe-area-inset-top) + 84px));
   pointer-events: none;
@@ -749,7 +760,7 @@ canvas {
 
 /* Mute chip — reachable on title and in-run, safe-area aware (M key too). */
 #mute-button {
-  position: fixed;
+  position: absolute;
   top: max(10px, calc(env(safe-area-inset-top) + 6px));
   right: max(12px, calc(env(safe-area-inset-right) + 8px));
   min-width: 44px;

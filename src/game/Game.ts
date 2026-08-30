@@ -277,8 +277,8 @@ export class Game {
     // flanking houses (≥19m out) must survive the sweep.
     this.world.clearObstaclesNear(this.bunkerX, this.bunkerZ, 15);
     this.world.clearObstaclesNear(this.bunkerX, this.bunkerZ + 26, 12);
-    // The village street: two pairs flanking the firing lane, on the same
-    // measured courtyard (re-measured on every reroll).
+    // The village street: two pairs flanking a WIDE lane (inner wall ≥16m
+    // out on desktop, ≥11m on compact), on the same measured courtyard.
     this.world.placeYardHouses(this.bunkerX, this.bunkerZ, this.villageSeed);
 
     this.gunnerInstance?.dispose();
@@ -721,9 +721,13 @@ export class Game {
 
     const pointer = this.input.readPointer();
     if (pointer.has) {
+      // Letterbox-safe: pointer events are window-space, the portrait
+      // column floats centered — convert through the canvas rect and clamp
+      // to the frame so outside-column moves park the aim at an edge.
+      const rect = this.canvas.getBoundingClientRect();
       this.aimNdc.set(
-        (pointer.x / Math.max(1, this.canvas.clientWidth)) * 2 - 1,
-        -(pointer.y / Math.max(1, this.canvas.clientHeight)) * 2 + 1,
+        Math.max(-1, Math.min(1, ((pointer.x - rect.left) / Math.max(1, rect.width)) * 2 - 1)),
+        Math.max(-1, Math.min(1, -((pointer.y - rect.top) / Math.max(1, rect.height)) * 2 + 1)),
       );
       this.raycaster.setFromCamera(this.aimNdc, this.world.camera);
       this.groundPlane.set(new THREE.Vector3(0, 1, 0), -this.bunkerGroundY);
@@ -733,7 +737,7 @@ export class Game {
     }
 
     // Keep the ring inside the kill yard: a radial clamp, all directions.
-    const maxAim = this.compact ? 28 : 38;
+    const maxAim = 28;
     const adx = this.aimPoint.x - this.bunkerX;
     const adz = this.aimPoint.z - this.bunkerZ;
     const aimDist = Math.hypot(adx, adz);
@@ -795,12 +799,14 @@ export class Game {
     // horns/claws/stride), from ~29° above grade. The view PANS toward the
     // aim with a deadzone — sweep the pointer to an edge to look around the
     // ring; recentre to settle. D = orbit radius, H = eye height.
-    const qv = this.compact
-      ? { dist: 28, height: 21, lookAhead: 10, fov: 0, hFov: 42 }
-      : { dist: 34, height: 30, lookAhead: 6, fov: 32, hFov: 0 };
-    let baseFov = qv.fov ?? 40;
-    if (this.compact) {
-      const aspect = Math.max(0.55, Math.min(2.2, this.canvas.clientWidth / Math.max(1, this.canvas.clientHeight)));
+    // 모바일 중심 세로형 단일 구성: the phone lens is THE lens — desktop
+    // letterboxes the same column. Horizontal-FOV anchored so the lane
+    // width is constant across devices; vertical FOV derives from the
+    // column aspect (9:19 ≈ 72°, clamped for safety).
+    const qv = { dist: 28, height: 21, lookAhead: 10, fov: 0, hFov: 42 };
+    let baseFov = 40;
+    {
+      const aspect = Math.max(0.5, Math.min(2.2, this.canvas.clientWidth / Math.max(1, this.canvas.clientHeight)));
       baseFov = (2 * Math.atan(Math.tan((qv.hFov * Math.PI) / 360) / aspect) * 180) / Math.PI;
       baseFov = Math.min(72, Math.max(40, baseFov));
     }
