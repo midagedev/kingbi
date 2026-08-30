@@ -262,9 +262,9 @@ export class World {
       { style: 'choga' as const, dx: -21, dz: -16, rot: 2.6 },
       { style: 'giwa' as const, dx: 21, dz: -18, rot: -2.6 },
     ];
-    // Fine house cubes; the distant palace runs coarse (it reads at 90m,
-    // and its surface area would drown the triangle budget at house scale).
-    const size = this.compact ? 0.26 : 0.18;
+    // Chunky house cubes — debris reads at 27m camera height (0.18 made the
+    // blasts look like dust); the distant palace still runs coarse.
+    const size = this.compact ? 0.32 : 0.24;
     const palaceSize = this.compact ? 0.68 : 0.7;
     const jitterRng = createSeededRandom((seed ^ 0x7ee1) >>> 0);
     // Shared palettes per style (cheoma's own material sharing).
@@ -392,7 +392,7 @@ export class World {
 
   /** The street's cube size — debris chunks scale with it. */
   voxelSize(): number {
-    return this.compact ? 0.26 : 0.18;
+    return this.compact ? 0.32 : 0.24;
   }
 
   /** Collapse tick — drives the pancake animation, dusts landings. */

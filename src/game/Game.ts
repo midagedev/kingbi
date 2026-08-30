@@ -1339,10 +1339,12 @@ export class Game {
       const brute = type === 'brute';
       const tint = this.rng();
       const speed = (7.5 + this.rng() * 7) * (brute ? 0.55 : 1);
+      // 달빛 로브 — moonlit pale (near-black vanished into the night ground:
+      // corpses must READ from the 27m rig or the pile doesn't exist).
       this.rubble.spawnCorpse(
         position.x, gibY + 0.15, position.z,
         this.rng() * Math.PI * 2, brute ? 2.8 : type === 'runner' ? 0.72 : type === 'shield' ? 1.05 : 1,
-        0.09 + tint * 0.07 + (elite ? 0.05 : 0), 0.08 + tint * 0.06, 0.11 + (1 - tint) * 0.08,
+        0.34 + tint * 0.14 + (elite ? 0.07 : 0), 0.33 + tint * 0.12, 0.4 + (1 - tint) * 0.1,
         dirX * speed, 4.5 + this.rng() * 4, dirZ * speed,
         (this.rng() - 0.5) * 10, (this.rng() - 0.5) * 8, (this.rng() - 0.5) * 10,
       );
@@ -1996,6 +1998,7 @@ export class Game {
       kills: this.kills,
       rubble: this.rubble ? this.rubble.bodyCount : -2,
       corpses: this.rubble ? this.rubble.corpseCount : -2,
+      windows: this.world.voxelHouseManager()?.glowMesh.count ?? -1,
       physMs: +this.physMs.toFixed(2),
       physAwake: this.rubble?.awakeCount ?? -1,
       updateMs: +this.updateMs.toFixed(2),

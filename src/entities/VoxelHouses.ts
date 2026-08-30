@@ -12,6 +12,9 @@ import * as THREE from 'three';
  * slot region, so cell→slot maps and reset() stay trivial.
  */
 
+/** 창호지 window-pane budget across all houses + the palace. */
+const GLOW_CAPACITY = 512;
+
 interface HouseVoxels {
   index: number;
   baseY: number;
@@ -34,6 +37,8 @@ interface HouseVoxels {
   originX: number;
   originY: number;
   originZ: number;
+  /** Cell i → window-pane glow slot, or -1 (창호지 발광). */
+  glowCells: Int32Array | null;
   /** Collapse animation state (allocated on trigger). */
   fallDelay: Float32Array | null;
   fallVx: Float32Array | null;
@@ -256,6 +261,8 @@ export function voxelizeGroup(
 
 export class VoxelHouses {
   readonly mesh: THREE.InstancedMesh;
+  /** 밤의 창호지 — unlit warm panes riding the facades; bloom does the rest. */
+  readonly glowMesh: THREE.InstancedMesh;
   private readonly houses: HouseVoxels[] = [];
   private readonly matrix = new THREE.Matrix4();
   private readonly quat = new THREE.Quaternion();
@@ -264,6 +271,17 @@ export class VoxelHouses {
   private readonly pos = new THREE.Vector3();
   private readonly capColor = new THREE.Color();
   private total = 0;
+  private glowTotal = 0;
+  private readonly glowBase = new Float32Array(GLOW_CAPACITY * 3);
+  private readonly glowPhase = new Float32Array(GLOW_CAPACITY);
+  /** glow slot → owning house/cell (reset repaint + destruction sync). */
+  private readonly glowHouse = new Int32Array(GLOW_CAPACITY).fill(-1);
+  private readonly glowCell = new Int32Array(GLOW_CAPACITY).fill(-1);
+  /** Baked outward offset (the pane rides proud of the facade). */
+  private readonly glowOffX = new Float32Array(GLOW_CAPACITY);
+  private readonly glowOffZ = new Float32Array(GLOW_CAPACITY);
+  private glowTime = 0;
+  private glowTick = 0;
 
   constructor(scene: THREE.Scene, capacity: number) {
     const geometry = new THREE.BoxGeometry(1, 1, 1);
@@ -274,6 +292,15 @@ export class VoxelHouses {
     this.mesh.name = 'voxel-houses';
     this.mesh.count = 0;
     scene.add(this.mesh);
+
+    const glowGeometry = new THREE.BoxGeometry(1, 1, 1);
+    const glowMaterial = new THREE.MeshBasicMaterial({ toneMapped: false });
+    this.glowMesh = new THREE.InstancedMesh(glowGeometry, glowMaterial, GLOW_CAPACITY);
+    this.glowMesh.frustumCulled = false;
+    this.glowMesh.name = 'voxel-windows';
+    this.glowMesh.count = 0;
+    for (let i = 0; i < GLOW_CAPACITY; i += 1) this.hideGlow(i);
+    scene.add(this.glowMesh);
   }
 
   /** Register a voxelize result; returns the house index. */
@@ -303,6 +330,7 @@ export class VoxelHouses {
       originX: data.box.min.x,
       originY: data.box.min.y,
       originZ: data.box.min.z,
+      glowCells: new Int32Array(count).fill(-1),
       fallDelay: null, fallVx: null, fallVy: null, fallVz: null, fallY: null,
     };
     this.houses.push(house);
@@ -312,9 +340,129 @@ export class VoxelHouses {
       house.cellSlot[this.cellOf(house, data.sx[i], data.sy[i], data.sz[i])] = i + 1;
       this.writeSlot(slot, data.sx[i], data.sy[i], data.sz[i], data.sr[i], data.sg[i], data.sb[i]);
     }
+    this.placeWindows(house);
     this.mesh.count = this.total;
     this.flush();
     return house.index;
+  }
+
+  private occupiedCell(house: HouseVoxels, ix: number, iy: number, iz: number): boolean {
+    if (ix < 0 || ix >= house.nx || iy < 0 || iy >= house.ny || iz < 0 || iz >= house.nz) return false;
+    return house.cellSlot[ix + iy * house.nx + iz * house.nx * house.ny] !== 0;
+  }
+
+  /** 창호지 — stamp warm unlit panes on the outer shell. A cell qualifies
+   *  when it sits in the wall band, has open space on an axis, and the open
+   *  side faces AWAY from the house center (thin 1-cell walls included).
+   *  Panes ride the facade slightly proud so they read through bloom. */
+  private placeWindows(house: HouseVoxels): void {
+    const size = house.size;
+    const bigCell = size > 0.4;
+    const bandMin = bigCell ? 1.0 : 0.75;
+    const bandMax = bigCell ? 4.4 : 2.5;
+    const maxWindows = bigCell ? 30 : 10;
+    const spacingSq = (bigCell ? 4.6 : 1.7) ** 2;
+    const centerX = house.originX + (house.nx * size) / 2;
+    const centerZ = house.originZ + (house.nz * size) / 2;
+    const picked: number[] = [];
+    for (let iz = 0; iz < house.nz && picked.length < maxWindows; iz += 1) {
+      for (let iy = 0; iy < house.ny && picked.length < maxWindows; iy += 1) {
+        const y = house.originY + (iy + 0.5) * size;
+        if (y - house.baseY < bandMin || y - house.baseY > bandMax) continue;
+        for (let ix = 0; ix < house.nx && picked.length < maxWindows; ix += 1) {
+          const cell = ix + iy * house.nx + iz * house.nx * house.ny;
+          const i = house.cellSlot[cell] - 1;
+          if (i < 0) continue;
+          let ox = 0;
+          let oz = 0;
+          if (!this.occupiedCell(house, ix + 1, iy, iz) || !this.occupiedCell(house, ix - 1, iy, iz)) {
+            ox = house.sx[i] > centerX ? 1 : -1;
+            if (this.occupiedCell(house, ix + ox, iy, iz)) continue;
+          } else if (!this.occupiedCell(house, ix, iy, iz + 1) || !this.occupiedCell(house, ix, iy, iz - 1)) {
+            oz = house.sz[i] > centerZ ? 1 : -1;
+            if (this.occupiedCell(house, ix, iy, iz + oz)) continue;
+          } else {
+            continue;
+          }
+          const x = house.sx[i];
+          const z = house.sz[i];
+          let tooClose = false;
+          for (const p of picked) {
+            const dx = house.sx[p] - x;
+            const dz = house.sz[p] - z;
+            if (dx * dx + dz * dz < spacingSq) {
+              tooClose = true;
+              break;
+            }
+          }
+          if (tooClose) continue;
+          picked.push(i);
+          this.stampWindow(house, i, ix, iy, iz, ox, oz, bigCell);
+        }
+      }
+    }
+  }
+
+  /** One pane: the seed cell plus its in-wall tangent/up neighbors (a
+   *  2×2 of 창호지 at house scale, a single broad pane at palace scale). */
+  private stampWindow(
+    house: HouseVoxels, seed: number, ix: number, iy: number, iz: number,
+    ox: number, oz: number, bigCell: boolean,
+  ): void {
+    if (this.glowTotal >= GLOW_CAPACITY) return;
+    const cells: Array<[number, number, number]> = [[ix, iy, iz]];
+    if (!bigCell) {
+      const tx = oz !== 0 ? 1 : 0;
+      const tz = ox !== 0 ? 1 : 0;
+      if (this.occupiedCell(house, ix + tx, iy, iz + tz)) cells.push([ix + tx, iy, iz + tz]);
+      if (this.occupiedCell(house, ix, iy + 1, iz)) cells.push([ix, iy + 1, iz]);
+      if (cells.length > 1 && this.occupiedCell(house, ix + tx, iy + 1, iz + tz)) cells.push([ix + tx, iy + 1, iz + tz]);
+    }
+    // Deterministic per-window tint/phase (hash — voxelization, not gameplay rng).
+    const hash = Math.abs(Math.sin(seed * 12.9898 + house.index * 78.233)) % 1;
+    const warm = 0.8 + hash * 0.35;
+    for (const [cx, cy, cz] of cells) {
+      const cell = cx + cy * house.nx + cz * house.nx * house.ny;
+      const i = house.cellSlot[cell] - 1;
+      if (i < 0 || house.glowCells![i] >= 0) continue;
+      if (this.glowTotal >= GLOW_CAPACITY) return;
+      const slot = this.glowTotal;
+      this.glowTotal += 1;
+      house.glowCells![i] = slot;
+      this.glowHouse[slot] = house.index;
+      this.glowCell[slot] = i;
+      const offX = ox * house.size * 0.52;
+      const offZ = oz * house.size * 0.52;
+      this.glowOffX[slot] = offX;
+      this.glowOffZ[slot] = offZ;
+      this.pos.set(house.sx[i] + offX, house.sy[i], house.sz[i] + offZ);
+      this.scale1.set(house.size * 1.04, house.size * 1.04, house.size * 0.42);
+      this.matrix.compose(this.pos, this.quat, this.scale1);
+      this.glowMesh.setMatrixAt(slot, this.matrix);
+      this.glowMesh.setColorAt(slot, this.capColor.setRGB(1.0 * warm, 0.66 * warm, 0.3 * warm));
+      this.glowBase[slot * 3] = 1.0 * warm;
+      this.glowBase[slot * 3 + 1] = 0.66 * warm;
+      this.glowBase[slot * 3 + 2] = 0.3 * warm;
+      this.glowPhase[slot] = hash * Math.PI * 2;
+    }
+    this.glowMesh.count = this.glowTotal;
+    this.glowMesh.instanceMatrix.needsUpdate = true;
+    if (this.glowMesh.instanceColor) this.glowMesh.instanceColor.needsUpdate = true;
+  }
+
+  private hideGlow(slot: number): void {
+    this.pos.set(0, -1000, 0);
+    this.matrix.compose(this.pos, this.quat, this.scale0);
+    this.glowMesh.setMatrixAt(slot, this.matrix);
+  }
+
+  /** A chewed-out cell takes its window pane with it (멀쩡한 창만 남지 않게). */
+  private killGlowCell(house: HouseVoxels, i: number): void {
+    const g = house.glowCells?.[i] ?? -1;
+    if (g < 0) return;
+    this.hideGlow(g);
+    house.glowCells![i] = -1;
+    this.glowMesh.instanceMatrix.needsUpdate = true;
   }
 
   private cellOf(house: HouseVoxels, x: number, y: number, z: number): number {
@@ -361,6 +509,7 @@ export class VoxelHouses {
         house.cellSlot[this.cellOf(house, house.sx[i], house.sy[i], house.sz[i])] = 0;
         house.alive -= 1;
         this.killSlot(house.slots[i]);
+        this.killGlowCell(house, i);
         out.push({ x: house.sx[i], y: house.sy[i], z: house.sz[i], r: house.sr[i], g: house.sg[i], b: house.sb[i] });
         removed += 1;
       }
@@ -389,6 +538,7 @@ export class VoxelHouses {
       house.cellSlot[cell] = 0;
       house.alive -= 1;
       this.killSlot(house.slots[i]);
+      this.killGlowCell(house, i);
       out.push({ x: house.sx[i], y: house.sy[i], z: house.sz[i], r: house.sr[i], g: house.sg[i], b: house.sb[i] });
       taken += 1;
     }
@@ -435,6 +585,14 @@ export class VoxelHouses {
     const house = this.houses[index];
     if (!house || house.collapsed) return;
     house.collapsed = true;
+    // The house goes dark as it comes apart — the windows die with it.
+    // (glowCells stays intact: reset() rebuilds panes from the glow tables.)
+    if (house.glowCells) {
+      for (let i = 0; i < house.count; i += 1) {
+        const g = house.glowCells[i];
+        if (g >= 0) this.hideGlow(g);
+      }
+    }
     house.fallDelay = new Float32Array(house.count);
     house.fallVx = new Float32Array(house.count);
     house.fallVy = new Float32Array(house.count);
@@ -492,6 +650,23 @@ export class VoxelHouses {
       }
     }
     if (dirty) this.mesh.instanceMatrix.needsUpdate = true;
+    // 촛불 플리커 — slow dual-sine per pane, deterministic in game time.
+    this.glowTime += delta;
+    this.glowTick -= delta;
+    if (this.glowTick <= 0 && this.glowTotal > 0) {
+      this.glowTick = 0.12;
+      const t = this.glowTime;
+      for (let s = 0; s < this.glowTotal; s += 1) {
+        const flicker = 0.72
+          + 0.28 * Math.sin(t * 3.1 + this.glowPhase[s]) * Math.sin(t * 1.7 + this.glowPhase[s] * 1.3);
+        this.glowMesh.setColorAt(s, this.capColor.setRGB(
+          this.glowBase[s * 3] * flicker,
+          this.glowBase[s * 3 + 1] * flicker,
+          this.glowBase[s * 3 + 2] * flicker,
+        ));
+      }
+      if (this.glowMesh.instanceColor) this.glowMesh.instanceColor.needsUpdate = true;
+    }
   }
 
   /** Run restart: every cube back in place. */
@@ -515,12 +690,33 @@ export class VoxelHouses {
     }
     this.mesh.count = this.total;
     this.flush();
+    // 창호지 back on the walls — panes rebuild from the glow tables.
+    for (let s = 0; s < this.glowTotal; s += 1) {
+      const house = this.houses[this.glowHouse[s]];
+      const i = this.glowCell[s];
+      if (!house || i < 0) continue;
+      this.pos.set(house.sx[i] + this.glowOffX[s], house.sy[i], house.sz[i] + this.glowOffZ[s]);
+      this.scale1.set(house.size * 1.04, house.size * 1.04, house.size * 0.42);
+      this.matrix.compose(this.pos, this.quat, this.scale1);
+      this.glowMesh.setMatrixAt(s, this.matrix);
+      this.glowMesh.setColorAt(s, this.capColor.setRGB(
+        this.glowBase[s * 3], this.glowBase[s * 3 + 1], this.glowBase[s * 3 + 2],
+      ));
+    }
+    if (this.glowTotal > 0) {
+      this.glowMesh.count = this.glowTotal;
+      this.glowMesh.instanceMatrix.needsUpdate = true;
+      if (this.glowMesh.instanceColor) this.glowMesh.instanceColor.needsUpdate = true;
+    }
   }
 
   dispose(): void {
     this.mesh.geometry.dispose();
     (this.mesh.material as THREE.Material).dispose();
     this.mesh.removeFromParent();
+    this.glowMesh.geometry.dispose();
+    (this.glowMesh.material as THREE.Material).dispose();
+    this.glowMesh.removeFromParent();
   }
 }
 
