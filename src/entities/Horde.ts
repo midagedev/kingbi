@@ -526,7 +526,10 @@ export class Horde {
     for (let i = 0; i < count; i += 1) {
       const zombie = this.acquire();
       if (!zombie) return;
-      const spread = (this.rng() - 0.5) * (approach01 >= 0.9 ? 1.5 : approach01 >= 0.5 ? 2.6 : 0.35);
+      // Wide rings (open field) tighten the arc so the river stays inside
+      // the visible lane instead of spawning off-screen flanks.
+      const spreadAmp = distRange && distRange[1] > 40 ? 0.7 : approach01 >= 0.9 ? 1.5 : approach01 >= 0.5 ? 2.6 : 0.35;
+      const spread = (this.rng() - 0.5) * spreadAmp;
       const dist = radiusMin + this.rng() * radiusSpan;
       const a = angle + spread;
       const type = this.pickType();
@@ -1386,6 +1389,10 @@ export class Horde {
         else if (zombie.type === 'runner') eyeMul = 0.85;
         else if (zombie.type === 'shield') eyeMul = 1.0;
         else eyeMul = zombie.elite ? 1.2 : 1.0;
+        // 근접 표시 — claws ON the gun: the eyes flare so the player sees
+        // exactly which bodies have closed in (they sit at the frame's
+        // bottom edge and are easy to lose in the murk).
+        if (zombie.clawing) eyeMul *= 1.9;
         this.scaleV.setScalar(eyeMul * scaleXZ);
         this.quat.identity();
         for (const side of [-1, 1]) {

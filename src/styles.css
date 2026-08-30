@@ -219,6 +219,42 @@ canvas {
 #seal-cluster.armed #seal-state { color: #ffd2c2; text-shadow: 0 0 12px rgba(255, 69, 83, 0.8); }
 #seal-cluster.armed #seal-bar { border-color: rgba(255, 69, 83, 0.65); }
 
+/* ── 근접 위협 플레어 — rim arcs pointing at the clawing bodies. ──── */
+#threat-flare-0,
+#threat-flare-1,
+#threat-flare-2 {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 0;
+  height: 0;
+  pointer-events: none;
+}
+#threat-flare-0::before,
+#threat-flare-1::before,
+#threat-flare-2::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 170px;
+  height: 130px;
+  transform: translate(-50%, -50%) translateY(-36dvh);
+  background: radial-gradient(closest-side, rgba(239, 25, 53, 0.8), rgba(239, 25, 53, 0) 72%);
+  filter: blur(3px);
+  opacity: 0;
+}
+#threat-flare-0.on::before,
+#threat-flare-1.on::before,
+#threat-flare-2.on::before {
+  animation: threat-pop 0.55s ease-out;
+}
+@keyframes threat-pop {
+  0% { opacity: 0; }
+  14% { opacity: var(--ts, 1); }
+  100% { opacity: 0; }
+}
+
 /* ── Crosshair ───────────────────────────────────────────────────── */
 #wave-banner {
   position: absolute;

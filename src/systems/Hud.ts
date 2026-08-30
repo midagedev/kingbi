@@ -54,6 +54,25 @@ export class Hud {
     this.stampEl.classList.add('on');
   }
 
+  private readonly threatFlares = [
+    this.getElement('#threat-flare-0'),
+    this.getElement('#threat-flare-1'),
+    this.getElement('#threat-flare-2'),
+  ];
+  private threatIdx = 0;
+
+  /** 방향 위협 플레어 — a red arc on the screen rim pointing at WHERE the
+   *  horde closed to claw range (flanks, or behind the camera). */
+  threatFlare(angleDeg: number, strength: number): void {
+    const element = this.threatFlares[this.threatIdx];
+    this.threatIdx = (this.threatIdx + 1) % this.threatFlares.length;
+    element.style.transform = `rotate(${angleDeg.toFixed(0)}deg)`;
+    element.style.setProperty('--ts', String(Math.min(1, 0.45 + strength * 0.55)));
+    element.classList.remove('on');
+    void element.offsetWidth;
+    element.classList.add('on');
+  }
+
   /** Manga-style inverted beat — one flash, ~90ms, big moments only. */
   impactFlash(): void {
     this.impactFlashEl.classList.remove('on');

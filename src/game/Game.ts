@@ -147,8 +147,8 @@ export class Game {
   private lastHeight = 0;
   private bunkerX = 0;
   private bunkerZ = 0;
-  /** Spawn ring far edge — clamped to the measured cliff runway. */
-  private spawnFar = 27;
+  /** Spawn ring far edge — the visible field depth, in meters. */
+  private spawnFar = 60;
   private bunkerGroundY = 0;
   private godmode = false;
 
@@ -257,7 +257,7 @@ export class Game {
     // fallen: the horde pours OUT of it toward the last gun in the field)
     // with the 배산 rising behind it.
     const h = queries.heightAt;
-    this.spawnFar = 27;
+    this.spawnFar = 60;
     if (palace) {
       this.bunkerX = palace.x;
       // Flattest candidate row in the open field south of the compound.
@@ -324,10 +324,10 @@ export class Game {
     // The kill yard is the palace front yard: splatter stays where they fall.
     this.bloodYard?.dispose();
     this.bloodYard = new BloodYard(this.world.scene, queries, {
-      minX: this.bunkerX - 38,
-      maxX: this.bunkerX + 38,
-      minZ: this.bunkerZ - 32,
-      maxZ: this.bunkerZ + 42,
+      minX: this.bunkerX - 55,
+      maxX: this.bunkerX + 55,
+      minZ: this.bunkerZ - 72,
+      maxZ: this.bunkerZ + 50,
     });
 
     if (!this.aimRing) {
@@ -347,7 +347,30 @@ export class Game {
       this.aimRing.name = 'aim-ring';
       this.world.scene.add(this.aimRing);
     }
+
+    if (!this.clawRing) {
+      this.clawRing = new THREE.Mesh(
+        new THREE.RingGeometry(3.6, 4.3, 40, 1),
+        new THREE.MeshBasicMaterial({
+          color: 0xef1935,
+          transparent: true,
+          opacity: 0,
+          side: THREE.DoubleSide,
+          depthWrite: false,
+          blending: THREE.AdditiveBlending,
+          toneMapped: false,
+        }),
+      );
+      this.clawRing.rotation.x = -Math.PI / 2;
+      this.clawRing.name = 'claw-ring';
+      this.world.scene.add(this.clawRing);
+    }
+    this.clawRing.position.set(this.gunX, this.gunGroundY + 0.25, this.gunZ);
   }
+
+  /** 근접 경고 링 — pulses under the gun while bodies are ON it. */
+  private clawRing: THREE.Mesh | null = null;
+  private threatFlareTimer = 0;
 
   private aimRing: THREE.Mesh | null = null;
 
@@ -445,7 +468,7 @@ export class Game {
           const spreadBearing = this.waveBearing + (this.rng() - 0.5) * 0.6;
           // Convergence ring around the palace yard — inside the reserved
           // palace grounds, so no hanok stand in the horde's way.
-          this.horde.spawnWave(batch, spreadBearing, this.day, 0.1 + this.day * 0.015, 1.0, undefined, [14, this.spawnFar], { x: this.bunkerX, z: this.bunkerZ });
+          this.horde.spawnWave(batch, spreadBearing, this.day, 0.1 + this.day * 0.015, 1.0, undefined, [18, this.spawnFar], { x: this.bunkerX, z: this.bunkerZ });
           this.waveSpawnQueue -= batch;
         }
       } else if (this.horde.activeCount === 0) {
@@ -748,7 +771,7 @@ export class Game {
     }
 
     // Keep the ring inside the kill yard: a radial clamp, all directions.
-    const maxAim = 28;
+    const maxAim = 55;
     const adx = this.aimPoint.x - this.bunkerX;
     const adz = this.aimPoint.z - this.bunkerZ;
     const aimDist = Math.hypot(adx, adz);
@@ -1257,15 +1280,34 @@ export class Game {
     }
     let attackers = 0;
     let bruteAtGate = false;
+    let threatDx = 0;
+    let threatDz = 0;
     this.horde.forEachActive((x, z, state, type) => {
       if (state !== 'chase') return;
       const dx = x - this.bunkerX;
       const dz = z - this.bunkerZ;
       if (dx * dx + dz * dz < CLAW_RANGE * CLAW_RANGE) {
         attackers += type === 'brute' ? 3 : 1;
+        threatDx += dx;
+        threatDz += dz;
         if (type === 'brute') bruteAtGate = true;
       }
     });
+    // 근접 시각화: the claw ring under the gun breathes, and edge flares
+    // point at WHERE the bodies closed in (lateral flanks, or behind the
+    // camera — the ones you can never see).
+    if (this.clawRing) {
+      const mat = this.clawRing.material as THREE.MeshBasicMaterial;
+      const target = attackers > 0 ? 0.5 + Math.sin(this.elapsed * 9) * 0.28 : 0;
+      mat.opacity += (target - mat.opacity) * Math.min(1, delta * 8);
+      this.clawRing.scale.setScalar(attackers > 0 ? 1 + Math.sin(this.elapsed * 9) * 0.07 : 1);
+    }
+    this.threatFlareTimer -= delta;
+    if (attackers > 0 && this.threatFlareTimer <= 0) {
+      this.threatFlareTimer = 0.45;
+      const deg = (Math.atan2(threatDx, -threatDz) * 180) / Math.PI;
+      this.hud.threatFlare(deg, Math.min(1, attackers / 5));
+    }
     if (attackers > 0) {
       if (!this.hintedWall && this.day <= 2) {
         this.hintedWall = true;
@@ -1578,7 +1620,7 @@ export class Game {
           if (this.mode !== 'playing') this.beginRun();
           this.waveActive = true;
           this.day = 4;
-          const dist = [14, this.spawnFar] as const;
+          const dist = [18, this.spawnFar] as const;
           this.horde.spawnWave(150, -Math.PI / 2 + (this.rng() - 0.5) * 0.8, 4, 0.2, 0.55, { brute: 2, bloater: 6, shield: 8, runner: 10 }, dist, { x: this.bunkerX, z: this.bunkerZ });
           this.horde.spawnWave(160, -Math.PI / 2 + (this.rng() - 0.5) * 0.8, 4, 0.2, 0.75, undefined, dist, { x: this.bunkerX, z: this.bunkerZ });
         } else if (name === 'bloodnight') {
