@@ -26,6 +26,7 @@ interface Box3dModule {
   _bx_clear?: () => void;
   _bx_alive_count?: () => number;
   _bx_awake_count?: () => number;
+  _bx_add_static?: (x: number, y: number, z: number, hx: number, hy: number, hz: number) => void;
   HEAPF32: Float32Array;
 }
 
@@ -152,6 +153,35 @@ export class Box3dWorld {
   /** Live rigid-body count from the bridge (QA + the silent-fail probe). */
   get bodyCount(): number {
     return this.module?._bx_alive_count?.() ?? -1;
+  }
+
+  /** Terrain-following physics floor: the yard slopes 0.4→4.1m north of
+   *  the gun, so a single flat slab buries every corpse and rubble chunk
+   *  in the kill field (the "시체가 안 쌓인다" bug). 12m tiles sampled from
+   *  heightAt; the old flat slab stays deep below as the outer fallback. */
+  addTerrainTiles(
+    heightAt: (x: number, z: number) => number,
+    minX: number, maxX: number, minZ: number, maxZ: number,
+    tile = 12,
+  ): number {
+    const module = this.module;
+    if (!module?._bx_add_static) return 0;
+    let placed = 0;
+    for (let z = minZ; z < maxZ; z += tile) {
+      for (let x = minX; x < maxX; x += tile) {
+        const cx = x + tile / 2;
+        const cz = z + tile / 2;
+        const corners = [
+          heightAt(x, z), heightAt(x + tile, z),
+          heightAt(x, z + tile), heightAt(x + tile, z + tile),
+        ];
+        if (!corners.every((h) => Number.isFinite(h))) continue;
+        const h = (corners[0] + corners[1] + corners[2] + corners[3]) / 4;
+        module._bx_add_static(cx, h - 1, cz, tile / 2 + 0.15, 1, tile / 2 + 0.15);
+        placed += 1;
+      }
+    }
+    return placed;
   }
 
   get capacity(): number {

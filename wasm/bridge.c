@@ -40,6 +40,24 @@ void bx_init(float gravityY, float groundY, float halfExtent)
 	b3CreateHullShape( ground, &shapeDef, &slab.base );
 }
 
+// Terrain tile — static, OUTSIDE the dynamic slot pool (eviction must never
+// eat the ground). The yard slopes 0.4-4.1m; a single flat slab buries
+// corpses and rubble north of the gun and floats them south.
+void bx_add_static( float x, float y, float z, float hx, float hy, float hz )
+{
+	if ( b3World_IsValid( g_world ) == false )
+	{
+		return;
+	}
+	b3BodyDef bodyDef = b3DefaultBodyDef();
+	bodyDef.position = ( b3Pos ){ x, y, z };
+	b3BodyId ground = b3CreateBody( g_world, &bodyDef );
+	b3BoxHull tile = b3MakeBoxHull( hx, hy, hz );
+	b3ShapeDef shapeDef = b3DefaultShapeDef();
+	shapeDef.baseMaterial.friction = 0.85f;
+	b3CreateHullShape( ground, &shapeDef, &tile.base );
+}
+
 int bx_capacity( void )
 {
 	return BX_MAX_BODIES;

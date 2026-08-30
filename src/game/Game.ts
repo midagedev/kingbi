@@ -244,7 +244,17 @@ export class Game {
     this.updateTitleBest();
     onReady(false, '원귀를 깨우는 중…');
     this.rubble ??= new Box3dWorld(this.world.scene, 3072);
-    const physicsOk = await this.rubble.init(-26, this.bunkerGroundY, 320);
+    // The flat slab sinks 4m below the terrain — the REAL floor is the
+    // terrain tile grid (the yard slopes; corpses must rest on visible
+    // ground, not inside it).
+    const physicsOk = await this.rubble.init(-26, this.bunkerGroundY - 4, 320);
+    if (physicsOk) {
+      this.rubble.addTerrainTiles(
+        (x, z) => this.world.queries().heightAt(x, z),
+        this.bunkerX - 75, this.bunkerX + 75,
+        this.bunkerZ - 105, this.bunkerZ + 65,
+      );
+    }
     if (!physicsOk) console.warn('box3d wasm 미로딩 — 러블 비활성');
     console.info(`[box3d] ready=${physicsOk} bodies=${this.rubble.bodyCount} cap=${this.rubble.capacity}`);
     onReady(true, 'ready');
@@ -1155,30 +1165,47 @@ export class Game {
     const vox = this.world.voxelHouseManager();
     if (!vox || vox.isCollapsed(index)) return;
     this.chewScratch.length = 0;
-    // 관통 — the gatling doesn't stop at the entry skin: the round punches
-    // through the house, chewing a tunnel (old thatch is weak; the gun is
-    // not). Deeper bites run a slightly smaller radius.
+    // Entry burst — the face splinters back toward the gun (a spray, not a jet).
     vox.chew(x, y, z, radius, this.chewScratch);
+    let burst = Math.min(14, this.chewScratch.length);
+    if (this.chewScratch.length > 0) {
+      const half = vox.halfSize(index);
+      const stride = Math.max(1, Math.floor(this.chewScratch.length / burst));
+      for (let i = 0; i < this.chewScratch.length && burst > 0; i += stride) {
+        const cube = this.chewScratch[i];
+        burst -= 1;
+        this.rubble?.spawnRubble(
+          cube.x, cube.y, cube.z, half * (0.6 + this.rng() * 0.2), cube.r, cube.g, cube.b,
+          dirX * (5.5 + this.rng() * 5) + (this.rng() - 0.5) * 8,
+          2.5 + this.rng() * 3.5,
+          dirZ * (5.5 + this.rng() * 5) + (this.rng() - 0.5) * 8,
+          (this.rng() - 0.5) * 14, (this.rng() - 0.5) * 14, (this.rng() - 0.5) * 14,
+        );
+      }
+    }
+    // 관통 — the round exits the far side carrying the wall with it: debris
+    // JETS out the BACK (faster than it entered), raining behind the house.
+    // Old thatch is weak; the gatling is not.
+    this.chewScratch.length = 0;
     vox.chew(x + dirX * 2.4, y, z + dirZ * 2.4, radius * 0.78, this.chewScratch);
     vox.chew(x + dirX * 4.8, y, z + dirZ * 4.8, radius * 0.78, this.chewScratch);
     if (this.chewScratch.length > 0) {
-      // box3d 강체 — the crater erupts: real chunks at CELL size (never
-      // bigger — debris larger than the wall it came from reads fake),
-      // strided across the whole blast so the tunnel walls fly together.
+      // box3d 강체 — chunks at CELL size (never bigger: debris larger than
+      // the wall it came from reads fake), strided across the whole tunnel.
       const half = vox.halfSize(index);
-      const budget = Math.min(46, this.chewScratch.length);
+      const budget = Math.min(34, this.chewScratch.length);
       const stride = Math.max(1, Math.floor(this.chewScratch.length / budget));
       let spawned = 0;
       for (let i = 0; i < this.chewScratch.length && spawned < budget; i += stride) {
         const cube = this.chewScratch[i];
+        spawned += 1;
         this.rubble?.spawnRubble(
-          cube.x, cube.y, cube.z, half * (0.72 + this.rng() * 0.26), cube.r, cube.g, cube.b,
-          dirX * (9 + this.rng() * 10) + (this.rng() - 0.5) * 6,
-          3.5 + this.rng() * 7,
-          dirZ * (9 + this.rng() * 10) + (this.rng() - 0.5) * 6,
+          cube.x, cube.y, cube.z, half * (0.6 + this.rng() * 0.2), cube.r, cube.g, cube.b,
+          dirX * (13 + this.rng() * 12) + (this.rng() - 0.5) * 6,
+          1 + this.rng() * 3,
+          dirZ * (13 + this.rng() * 12) + (this.rng() - 0.5) * 6,
           (this.rng() - 0.5) * 16, (this.rng() - 0.5) * 16, (this.rng() - 0.5) * 16,
         );
-        spawned += 1;
       }
       this.vfx.hitSpark(x, y, z, dirX, dirZ, () => this.rng());
       if (this.woodSfxTimer <= 0) {
