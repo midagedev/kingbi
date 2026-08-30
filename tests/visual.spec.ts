@@ -62,6 +62,25 @@ test('renders a nonblank interactive game canvas', async ({ page }, testInfo) =>
   const sample = await sampleCanvas(page);
   expect(sample, JSON.stringify(sample)).toMatchObject({ ok: true });
 
+  // Wash guard — the desktop IBL envmap once laid an ambient floor that
+  // papered the whole night scene white (mean luminance ~198) while every
+  // structural check kept passing. A fresh run is a DARK ink night: the
+  // mean canvas luminance must sit well under the wash regime.
+  const washSample = await sampleCanvas(page);
+  const canvasPng = PNG.sync.read(await page.locator('#game-canvas').screenshot());
+  let lumSum = 0;
+  let lumCount = 0;
+  for (let i = 0; i < canvasPng.data.length; i += 4 * 61) {
+    lumSum += (canvasPng.data[i] + canvasPng.data[i + 1] + canvasPng.data[i + 2]) / 3;
+    lumCount += 1;
+  }
+  const meanLum = lumSum / lumCount;
+  expect(
+    meanLum,
+    `night scene must stay ink-dark (mean lum ${meanLum.toFixed(0)}; wash regime is ~200)`,
+  ).toBeLessThan(150);
+  void washSample;
+
   // The gatling must respond to real input: hold fire and verify kills/heat move.
   const readFiring = () =>
     page.evaluate((): { kills: number; heat: number } => ({

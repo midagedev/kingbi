@@ -1682,6 +1682,11 @@ export class Game {
       }),
       /** Draw census by scene root — the "what eats the frame" probe. */
       sceneCensus: () => this.world.sceneCensus(),
+      /** Toggle a composer pass by name (WebKit/Safari pipeline debugging). */
+      setPostPassEnabled: (name: string, enabled: boolean) =>
+        this.world.setPostPassEnabled(name, enabled),
+      /** Scale the desktop IBL envmap (0 = off) — wash probes. */
+      setEnvIntensity: (value: number) => this.world.setEnvIntensity(value),
       /** Terrain + staging probe: the north-height profile the defense
        *  placement was measured against, plus house/obstacle layout. */
       stageDebug: () => {

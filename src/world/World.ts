@@ -160,12 +160,16 @@ export class World {
     this.scene.add(this.camera);
 
     // Neutral IBL: without an environment map the gatling steel, brass and
-    // stone read flat gray no matter the lights. Kept dim so the noir night
-    // stays inky — envmap is a rim/sheen source, not ambient lift.
+    // stone read flat gray no matter the lights. BUT the envmap also lays a
+    // diffuse ambient FLOOR over every standard material — at the original
+    // 0.42 that floor washed the whole night scene to paper-white (lum 198
+    // vs true-night 12; mobile ships without the envmap and sits at 79).
+    // 0.16 keeps a sheen hint and lands the desktop on the compact night
+    // reference. envmap = rim/sheen source, never ambient lift.
     if (!compact) {
       const pmrem = new THREE.PMREMGenerator(this.renderer);
       this.scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
-      this.scene.environmentIntensity = 0.42;
+      this.scene.environmentIntensity = 0.16;
       pmrem.dispose();
     }
 
@@ -681,6 +685,16 @@ export class World {
         enabled: p.enabled !== false,
         isNoir: p === this.noirPass,
       })),
+      exposure: this.renderer.toneMappingExposure,
+      envIntensity: this.scene.environmentIntensity,
+      hasEnv: this.scene.environment !== null,
+      fog: this.scene.fog instanceof THREE.Fog
+        ? {
+            color: '#' + this.scene.fog.color.getHexString(),
+            near: +this.scene.fog.near.toFixed(1),
+            far: +this.scene.fog.far.toFixed(1),
+          }
+        : null,
       noir: this.noirPass
         ? {
             enabled: this.noirPass.enabled !== false,
@@ -692,6 +706,26 @@ export class World {
           }
         : null,
     };
+  }
+
+  /** QA: scale the desktop IBL envmap contribution (0 = off) — wash probes. */
+  setEnvIntensity(value: number): void {
+    this.scene.environmentIntensity = value;
+  }
+
+  /** QA: toggle a composer pass by constructor name (WebKit debugging). */
+  setPostPassEnabled(name: string, enabled: boolean): boolean {
+    const composer = (this.post as { composer?: { passes?: Array<{ enabled?: boolean; constructor?: { name?: string } }> } })
+      ?.composer;
+    if (!composer?.passes) return false;
+    let hit = false;
+    for (const pass of composer.passes) {
+      if ((pass.constructor?.name ?? '') === name) {
+        pass.enabled = enabled;
+        hit = true;
+      }
+    }
+    return hit;
   }
 
   render(): void {

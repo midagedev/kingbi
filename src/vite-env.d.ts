@@ -71,6 +71,10 @@ interface ThreeGameTestHooks {
   stageDebug(): Record<string, unknown>;
   /** Draw census by scene root — the "what eats the frame" probe. */
   sceneCensus(): Array<{ root: string; meshes: number; visible: number; tris: number }>;
+  /** Toggle a composer pass by constructor name (WebKit/Safari debugging). */
+  setPostPassEnabled(name: string, enabled: boolean): boolean;
+  /** Scale the desktop IBL envmap (0 = off) — wash probes. */
+  setEnvIntensity(value: number): void;
   /** Rebuild the village with a specific seed (staging QA across seeds). */
   reroll(seed: number): void;
 }
