@@ -242,9 +242,11 @@ export class World {
 
   /** 마당 석등 — warm anchors around the defense point. The flattened yard
    *  lost the candle-lit well to the re-staged viewpoint; four stone
-   *  lanterns give the night its focal warmth (and real point lights). */
+   *  lanterns give the night its focal warmth. Flames are toneMapped-off
+   *  emissive — bloom sells the glow (real PointLights cost ~8fps a pair
+   *  in per-pixel light math across every standard surface). */
   private yardLanterns: THREE.Group[] = [];
-  private yardLanternLights: THREE.PointLight[] = [];
+  private yardFlames: THREE.Mesh[] = [];
   private lanternTime = 0;
 
   placeYardLanterns(cx: number, cz: number): void {
@@ -255,7 +257,7 @@ export class World {
       [cx - 11, cz - 14], [cx + 11, cz - 14],
     ];
     const stone = new THREE.MeshStandardMaterial({ color: 0x4a474e, roughness: 0.95 });
-    const flameMat = new THREE.MeshBasicMaterial({ color: 0xffb45e, toneMapped: false });
+    const flameMat = new THREE.MeshBasicMaterial({ color: 0xffc06a, toneMapped: false });
     spots.forEach(([x, z], i) => {
       const ground = queries.heightAt(x, z);
       const group = new THREE.Group();
@@ -263,20 +265,18 @@ export class World {
       pedestal.position.y = 0.48;
       const shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.09, 0.4, 6), stone);
       shaft.position.y = 1.12;
-      const flame = new THREE.Mesh(new THREE.BoxGeometry(0.26, 0.3, 0.26), flameMat);
+      const flame = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.36, 0.3), flameMat);
       flame.position.y = 1.42;
       const roof = new THREE.Mesh(new THREE.ConeGeometry(0.42, 0.34, 4), stone);
       roof.position.y = 1.68;
       roof.rotation.y = Math.PI / 4;
-      const light = new THREE.PointLight(0xffa04a, 2.4, 17, 2);
-      light.position.y = 1.45;
-      group.add(pedestal, shaft, flame, roof, light);
+      group.add(pedestal, shaft, flame, roof);
+      this.yardFlames.push(flame);
       group.position.set(x, ground, z);
       group.rotation.y = i * 0.7;
       group.name = 'yard-lantern';
       this.scene.add(group);
       this.yardLanterns.push(group);
-      this.yardLanternLights.push(light);
     });
   }
 
@@ -289,17 +289,17 @@ export class World {
       group.removeFromParent();
     }
     this.yardLanterns = [];
-    this.yardLanternLights = [];
+    this.yardFlames = [];
   }
 
   /** Candle-flicker for the yard lanterns (deterministic in game time). */
   updateYardLanterns(delta: number): void {
-    if (this.yardLanternLights.length === 0) return;
+    if (this.yardFlames.length === 0) return;
     this.lanternTime += delta;
-    for (let i = 0; i < this.yardLanternLights.length; i += 1) {
+    for (let i = 0; i < this.yardFlames.length; i += 1) {
       const phase = i * 1.7;
-      const flicker = 0.82 + 0.18 * Math.sin(this.lanternTime * 7.3 + phase) * Math.sin(this.lanternTime * 2.9 + phase * 1.3);
-      this.yardLanternLights[i].intensity = 2.4 * flicker;
+      const flicker = 0.86 + 0.14 * Math.sin(this.lanternTime * 7.3 + phase) * Math.sin(this.lanternTime * 2.9 + phase * 1.3);
+      this.yardFlames[i].scale.setScalar(flicker);
     }
   }
 
