@@ -122,6 +122,11 @@ export class World {
     this.scene.add(this.hemi);
 
     this.camera = new THREE.PerspectiveCamera(55, 1, 0.1, 900);
+    // Voxel houses live on layer 1 (fire-spot-only shadow casting) — the
+    // sky lights and the camera must still reach them.
+    this.camera.layers.enable(1);
+    this.sun.layers.enable(1);
+    this.hemi.layers.enable(1);
     // The camera is in the scene graph so camera children render.
     this.scene.add(this.camera);
 
@@ -400,18 +405,18 @@ export class World {
     // an inner pair deep in the lane (the horde river splits around them),
     // the giwa pair as the outer anchors — a staggered village instead of
     // one wide row. Compact keeps the four-house row (instance budget).
-    const specs = this.compact ? [
+    const specs: Array<{ style: 'choga' | 'giwa'; dx: number; dz: number; rot: number; vox?: number }> = this.compact ? [
       { style: 'choga' as const, dx: -20, dz: -13, rot: 0 },
       { style: 'choga' as const, dx: 21, dz: -14, rot: 0 },
       { style: 'giwa' as const, dx: -23, dz: -19, rot: 2.6 },
       { style: 'giwa' as const, dx: 23, dz: -20, rot: -2.6 },
     ] : [
-      { style: 'choga' as const, dx: -14, dz: -12, rot: 0.15 },
-      { style: 'choga' as const, dx: 14.5, dz: -13, rot: -0.1 },
-      { style: 'choga' as const, dx: -7.5, dz: -24, rot: 1.1, vox: 0.32 },
-      { style: 'choga' as const, dx: 7.5, dz: -25, rot: -1.05, vox: 0.32 },
-      { style: 'giwa' as const, dx: -25, dz: -21.5, rot: 2.6 },
-      { style: 'giwa' as const, dx: 25, dz: -22.5, rot: -2.6 },
+      { style: 'choga' as const, dx: -14, dz: -12, rot: 0.15, vox: 0.11 },
+      { style: 'choga' as const, dx: 14.5, dz: -13, rot: -0.1, vox: 0.11 },
+      { style: 'choga' as const, dx: -7.5, dz: -24, rot: 1.1, vox: 0.24 },
+      { style: 'choga' as const, dx: 7.5, dz: -25, rot: -1.05, vox: 0.24 },
+      { style: 'giwa' as const, dx: -25, dz: -21.5, rot: 2.6, vox: 0.145 },
+      { style: 'giwa' as const, dx: 25, dz: -22.5, rot: -2.6, vox: 0.145 },
     ];
     // Voxel LOD by distance — near row runs FINE (0.16: roofline and wall
     // openings read at close range), the village thatch at mid distance

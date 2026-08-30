@@ -390,6 +390,10 @@ export class VoxelHouses {
     const material = new THREE.MeshStandardMaterial({ roughness: 1, metalness: 0, envMapIntensity: 0.7 });
     this.mesh = new THREE.InstancedMesh(geometry, material, capacity);
     this.mesh.frustumCulled = false;
+    // Layer 1: the voxel mass casts ONLY into the fire spot's shadow map —
+    // the cached moon map (re-rendered whenever a census shift happens
+    // mid-fight) never pays this mesh's huge vertex load again.
+    this.mesh.layers.set(1);
     this.mesh.castShadow = true;
     this.mesh.receiveShadow = true;
     this.mesh.name = 'voxel-houses';
@@ -724,21 +728,37 @@ export class VoxelHouses {
     let removed = 0;
     for (const house of this.houses) {
       if (house.collapsed) continue;
-      if (x < house.originX - radius || x > house.originX + house.nx * house.size + radius) continue;
-      if (z < house.originZ - radius || z > house.originZ + house.nz * house.size + radius) continue;
-      if (y < house.originY - radius || y > house.originY + house.ny * house.size + radius) continue;
-      for (let i = 0; i < house.count; i += 1) {
-        if (house.cellSlot[this.cellOf(house, house.sx[i], house.sy[i], house.sz[i])] !== i + 1) continue;
-        const dx = house.sx[i] - x;
-        const dy = house.sy[i] - y;
-        const dz = house.sz[i] - z;
-        if (dx * dx + dy * dy + dz * dz > rSq) continue;
-        house.cellSlot[this.cellOf(house, house.sx[i], house.sy[i], house.sz[i])] = 0;
-        house.alive -= 1;
-        this.killSlot(house.slots[i]);
-        this.killGlowCell(house, i);
-        out.push({ x: house.sx[i], y: house.sy[i], z: house.sz[i], r: house.sr[i], g: house.sg[i], b: house.sb[i], s: house.size });
-        removed += 1;
+      const size = house.size;
+      if (x < house.originX - radius || x > house.originX + house.nx * size + radius) continue;
+      if (z < house.originZ - radius || z > house.originZ + house.nz * size + radius) continue;
+      if (y < house.originY - radius || y > house.originY + house.ny * size + radius) continue;
+      // GRID WINDOW: walk only the cells the sphere covers, never the
+      // whole house — the fine 0.11m chogas carry ~40k cells and the
+      // gatling drops dozens of spheres a second.
+      const ix0 = Math.max(0, Math.floor((x - radius - house.originX) / size));
+      const ix1 = Math.min(house.nx - 1, Math.floor((x + radius - house.originX) / size));
+      const iy0 = Math.max(0, Math.floor((y - radius - house.originY) / size));
+      const iy1 = Math.min(house.ny - 1, Math.floor((y + radius - house.originY) / size));
+      const iz0 = Math.max(0, Math.floor((z - radius - house.originZ) / size));
+      const iz1 = Math.min(house.nz - 1, Math.floor((z + radius - house.originZ) / size));
+      for (let iz = iz0; iz <= iz1; iz += 1) {
+        for (let iy = iy0; iy <= iy1; iy += 1) {
+          for (let ix = ix0; ix <= ix1; ix += 1) {
+            const cell = ix + iy * house.nx + iz * house.nx * house.ny;
+            const i = house.cellSlot[cell] - 1;
+            if (i < 0) continue;
+            const dx = house.sx[i] - x;
+            const dy = house.sy[i] - y;
+            const dz = house.sz[i] - z;
+            if (dx * dx + dy * dy + dz * dz > rSq) continue;
+            house.cellSlot[cell] = 0;
+            house.alive -= 1;
+            this.killSlot(house.slots[i]);
+            this.killGlowCell(house, i);
+            out.push({ x: house.sx[i], y: house.sy[i], z: house.sz[i], r: house.sr[i], g: house.sg[i], b: house.sb[i], s: house.size });
+            removed += 1;
+          }
+        }
       }
     }
     if (removed > 0) this.flush();

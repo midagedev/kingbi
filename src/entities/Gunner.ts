@@ -222,6 +222,7 @@ export class Gunner {
     this.materials.push(this.muzzleFlash.material as THREE.SpriteMaterial);
 
     this.muzzleLight = new THREE.PointLight(0xff6a3a, 0, 16, 2);
+    this.muzzleLight.layers.enable(1); // voxel houses live on layer 1
     this.muzzleLight.position.set(0, -0.03, -1.0);
     this.gun.add(this.muzzleLight);
 

@@ -155,6 +155,10 @@ export class FireField {
       this.light.shadow.normalBias = 0.04;
       this.lightTarget = new THREE.Object3D();
       this.light.target = this.lightTarget;
+      // Layer 1 = the voxel-house mass: the spot LIGHTS it and takes its
+      // real shadows; the moon map skips it (cache stays cheap mid-fight).
+      this.light.layers.enable(1);
+      this.light.shadow.camera.layers.enable(1);
       scene.add(this.light, this.lightTarget);
     } else {
       this.lightTarget = null;
