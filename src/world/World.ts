@@ -102,7 +102,7 @@ export class World {
     this.sun = new THREE.DirectionalLight(0xfff0dd, 2.6);
     this.sun.position.set(30, 42, 26);
     this.sun.castShadow = true;
-    this.sun.shadow.mapSize.set(compact ? 2048 : 4096, compact ? 2048 : 4096);
+    this.sun.shadow.mapSize.set(compact ? 1024 : 2048, compact ? 1024 : 2048);
     this.sun.shadow.camera.left = -60;
     this.sun.shadow.camera.right = 60;
     this.sun.shadow.camera.top = 60;
@@ -116,6 +116,10 @@ export class World {
     // change (village rebuild, voxel chew/collapse) — a per-frame 4096²
     // scene render bought back for the fire spot's real shadows.
     this.sun.shadow.autoUpdate = false;
+    // Houses (layer 1) cast into the moon map; the horde (layer 2) does
+    // NOT — the cache would go stale the moment the river moves.
+    this.sun.shadow.camera.layers.set(0);
+    this.sun.shadow.camera.layers.enable(1);
     this.scene.add(this.sun);
 
     this.hemi = new THREE.HemisphereLight(0xbdd0e4, 0x8a7a63, 0.9);
@@ -262,6 +266,8 @@ export class World {
   /** Moon-map staleness + last-seen voxel census (cache invalidation). */
   private shadowStale = true;
   private lastShadowAlive = -1;
+  private lastMoonShadowAt = -1;
+  private elapsedTime = 0;
   private yardFlames: THREE.Mesh[] = [];
   private yardPools: THREE.Mesh[] = [];
   private lanternTime = 0;
@@ -1067,14 +1073,17 @@ export class World {
   private targetExposure = 1.05;
 
   update(delta: number): void {
-    // Cached moon map: re-render only when the casting statics changed
-    // (village rebuild flagged via shadowStale; voxel chew/collapse shifts
-    // the census). Dynamic casters are off, so this is the whole truth.
+    this.elapsedTime += delta;
+    // Cached moon map: houses (layer 1) cast into it again, and the map
+    // re-renders only when the voxel census shifts — throttled, so a
+    // demolition storm pays at most three 2048² renders a second instead
+    // of one per chewed frame. The horde (layer 2) never enters this map.
     const voxelCensus = this.voxelHouses?.totalAlive ?? -1;
-    if (this.shadowStale || voxelCensus !== this.lastShadowAlive) {
+    if ((this.shadowStale || voxelCensus !== this.lastShadowAlive) && this.elapsedTime - this.lastMoonShadowAt > 0.6) {
       this.sun.shadow.needsUpdate = true;
       this.shadowStale = false;
       this.lastShadowAlive = voxelCensus;
+      this.lastMoonShadowAt = this.elapsedTime;
     }
     this.env?.update?.(delta);
     this.post?.update?.(delta);

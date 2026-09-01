@@ -147,8 +147,9 @@ export class Horde {
 
     const makePart = (geometry: THREE.BufferGeometry, name: string) => {
       const mesh = new THREE.InstancedMesh(geometry, bodyMat, capacity);
-      // No moon-map casting: dynamic casters would force a per-frame
-      // 4096 shadow render. 원귀 shadows come from the FIRE spot instead.
+      // No moon-map casting: dynamic casters would force per-frame map
+      // re-renders, and real per-light lantern spots cost ~3fps each in
+      // stress overdraw (measured). Zombie shadows ride the streak system.
       mesh.castShadow = false;
       mesh.frustumCulled = false;
       mesh.count = 0;
