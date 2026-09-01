@@ -55,6 +55,12 @@ interface ThreeGameTestHooks {
   collapseHouseAt(x: number, z: number): void;
   /** Per-house interior audit — enclosed room voids vs solid fill (QA). */
   voxelHollow(): Array<{ index: number; cells: number; voids: number; layers: number; layersWithVoids: number }>;
+  /** 색광 bake audit — lit voxels + peak propagated light per house (QA). */
+  voxelLightDebug(): Array<{ index: number; lit: number; max: number; tickMs: number }>;
+  /** 색광 paint audit — brightest-L rows of a house: base vs painted rgb. */
+  voxelLightRows(houseIndex: number): Array<{ base: number[]; painted: number[]; l: number }>;
+  /** Drop a live fire at a world point without collapsing (색광 QA). */
+  igniteFireAt(x: number, z: number, scale?: number): void;
   /** Raw corpse instanceColor rows, linear (colorspace QA). */
   corpseColorRows(): number[][];
   /** Detonate the 부적 봉인 at a world point (sigil + purge QA). */

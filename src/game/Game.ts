@@ -8,6 +8,7 @@ import { DebrisPool } from '../entities/DebrisPool';
 import { Box3dWorld } from '../physics/Box3dWorld';
 import { GibPool } from '../entities/GibPool';
 import { FireField } from '../entities/FireField';
+import type { VoxelLightSource } from '../entities/VoxelHouses';
 import { BloodYard } from '../entities/BloodYard';
 import { TracerPool } from '../entities/TracerPool';
 import { AudioSystem } from '../systems/AudioSystem';
@@ -66,6 +67,9 @@ export class Game {
   private readonly tracers: TracerPool;
   private readonly gibs: GibPool;
   private fires: FireField | null = null;
+  /** This frame's 색광 roster — yard lanterns + live fires, handed to the
+   *  voxel house bake (walls occlude, wounds glow — no extra real lights). */
+  private readonly voxelLights: VoxelLightSource[] = [];
   private bloodYard: BloodYard | null = null;
   private readonly vfx: VfxSystem;
   private readonly audio = new AudioSystem();
@@ -1562,6 +1566,28 @@ export class Game {
     this.bloodYard?.update(delta);
     this.fires?.update(delta, this.bunkerX, this.bunkerZ);
     this.fires?.updateShadows((visit) => this.horde.forEachActive(visit), groundAt, this.world.yardLanternSpots());
+    // 색광 전파 원천 — 석등(정적 온기) + 활화재(규모·활력 가중)를 복셀
+    // 베이크에 넘긴다: 닿는 벽이 전부 데워지고 구멍을 타고 방까지 스민다.
+    this.voxelLights.length = 0;
+    for (const lantern of this.world.yardLanternSpots()) {
+      this.voxelLights.push({
+        x: lantern.x,
+        y: groundAt(lantern.x, lantern.z) + 1.35,
+        z: lantern.z,
+        power: 0.5,
+        range: 7.5,
+      });
+    }
+    this.fires?.eachFire((x, y, z, scale, vigor) => {
+      this.voxelLights.push({
+        x,
+        y: y + 1.1,
+        z,
+        power: (0.78 + 0.6 * scale) * vigor,
+        range: 6.5 + 4.5 * scale,
+      });
+    });
+    this.world.setVoxelLightSources(this.voxelLights);
     this.impactSfxTimer -= delta;
     this.splatSfxTimer -= delta;
     this.clankSfxTimer -= delta;
@@ -2062,6 +2088,14 @@ export class Game {
         this.debugChewAt(x, z, y, radius),
       /** Per-house interior audit — enclosed room voids vs solid fill. */
       voxelHollow: () => this.world.voxelHouseManager()?.hollowDebug() ?? [],
+      /** 색광 bake audit — lit voxels + peak light per house. */
+      voxelLightDebug: () => this.world.voxelHouseManager()?.lightDebug() ?? [],
+      /** 색광 paint audit — brightest rows: baked base vs painted color. */
+      voxelLightRows: (houseIndex: number) => this.world.voxelHouseManager()?.lightPaintRows(houseIndex) ?? [],
+      /** Drop a live fire at a point (색광/화재 QA — no collapse needed). */
+      igniteFireAt: (x: number, z: number, scale = 1) => {
+        this.fires?.ignite(x, this.world.queries().heightAt(x, z), z, scale, () => this.rng());
+      },
       /** Raw corpse instanceColor rows (colorspace QA). */
       corpseColorRows: () => {
         const mesh = this.rubble?.corpseMesh;

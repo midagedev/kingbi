@@ -172,6 +172,14 @@ export class FireField {
     return this.fires.length;
   }
 
+  /** Enumerate live fires for the voxel 색광 bake (and QA) — `vigor` is
+   *  the dying-fade weight (1 while burning, 0 at cold). */
+  eachFire(visit: (x: number, y: number, z: number, scale: number, vigor: number) => void): void {
+    for (const fire of this.fires) {
+      visit(fire.x, fire.y, fire.z, fire.scale, fire.fade >= 0 ? Math.max(0, 1 - fire.fade / 2.6) : 1);
+    }
+  }
+
   /** A building just pancaked — light it. `jitter` is the game's seeded rng. */
   ignite(x: number, groundY: number, z: number, scale: number, jitter: () => number): void {
     // Re-ignite guard: a house already alight refreshes its fire instead

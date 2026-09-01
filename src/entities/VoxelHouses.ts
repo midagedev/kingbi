@@ -18,6 +18,34 @@ const GLOW_CAPACITY = 512;
  *  the cap only bounds the rigid-body rain — stress bought 3fps at 480). */
 const DETACHED_QUEUE_MAX = 240;
 
+/** 색광 전파 (voxel color-light bake) — lanterns and fires pushed as world
+ *  sources; the bake runs on a coarse padded grid per house, so adding a
+ *  light costs no real THREE light and no shadow map. */
+export interface VoxelLightSource {
+  x: number;
+  y: number;
+  z: number;
+  power: number;
+  range: number;
+}
+
+/** Bake cadence — sources are quasi-static (lanterns steady, fires drift
+ *  slowly); 0.3s reads as breathing firelight while keeping the stress
+ *  rig (burning house + continuous chew) inside a fraction of a frame. */
+const LIGHT_TICK = 0.3;
+/** BFS cutoff + repaint gate — below these the light is invisible. */
+const LIGHT_MIN = 0.035;
+const LIGHT_EPS = 0.01;
+/** Per-coarse-step costs: air passes cheap, solid fraction eats the light
+ *  (occlusion — a chewed hole lets the glow in, walls keep rooms dark). */
+const LIGHT_AIR_COST = 0.05;
+const LIGHT_WALL_COST = 0.22;
+/** Firelight tint (linear) added per unit of propagated light — measured
+ *  A/B on the demolish rig: +75% warm pixels over the flame-only frame. */
+const LIGHT_TINT_R = 0.44;
+const LIGHT_TINT_G = 0.20;
+const LIGHT_TINT_B = 0.072;
+
 interface HouseVoxels {
   index: number;
   baseY: number;
@@ -52,6 +80,20 @@ interface HouseVoxels {
   supportSeen: Uint8Array | null;
   lastSupportScan: number;
   lastScanAlive: number;
+  /** 색광 전파 — coarse PADDED grid (one ring of always-empty cells so
+   *  outside sources can wrap the light around the facade). */
+  cFactor: number;
+  cnx: number;
+  cny: number;
+  cnz: number;
+  cOcc: Uint8Array | null;
+  cLight: Float32Array | null;
+  /** Last PAINTED light per voxel — the epsilon gate for uploads. */
+  voxLight: Float32Array | null;
+  cOccAlive: number;
+  /** Source-roster + census signature — an unchanged house under
+   *  unchanged lights skips the bake entirely (steady state is free). */
+  lightSig: number;
 }
 
 export interface ChewedVoxel {
@@ -389,6 +431,13 @@ export class VoxelHouses {
   private groundAt: ((x: number, z: number) => number) | null = null;
   /** Visual chunks waiting for the physics layer (support detachments). */
   private readonly detachedQueue: ChewedVoxel[] = [];
+  /** 색광 전파 state — sources copied in by the Game layer each frame;
+   *  the bake itself ticks throttled (see LIGHT_TICK). */
+  private readonly lightSources: VoxelLightSource[] = [];
+  private readonly lightNear: number[] = [];
+  private lightAccum = 0;
+  private lightBfs: Int32Array = new Int32Array(4096);
+  private lightTickMs = 0;
 
   constructor(scene: THREE.Scene, capacity: number) {
     const geometry = new THREE.BoxGeometry(1, 1, 1);
@@ -428,6 +477,10 @@ export class VoxelHouses {
     const nx = Math.max(1, Math.ceil((data.box.max.x - data.box.min.x) / size));
     const ny = Math.max(1, Math.ceil((data.box.max.y - data.box.min.y) / size));
     const nz = Math.max(1, Math.ceil((data.box.max.z - data.box.min.z) / size));
+    // 색광 격자 — ~0.26m coarse cells: fine enough that a 1-2-voxel wall
+    // reads as a solid occluder (0.44m cells diluted walls under the
+    // solid-fraction threshold and lantern light leaked into rooms).
+    const cFactor = Math.max(1, Math.min(4, Math.round(0.26 / size)));
     const house: HouseVoxels = {
       index: this.houses.length,
       baseY: data.box.min.y,
@@ -445,6 +498,11 @@ export class VoxelHouses {
       glowCells: new Int32Array(count).fill(-1),
       fallDelay: null, fallVx: null, fallVy: null, fallVz: null, fallY: null,
       supportSeen: null, lastSupportScan: -1, lastScanAlive: -1,
+      cFactor,
+      cnx: Math.ceil(nx / cFactor) + 2,
+      cny: Math.ceil(ny / cFactor) + 2,
+      cnz: Math.ceil(nz / cFactor) + 2,
+      cOcc: null, cLight: null, voxLight: null, cOccAlive: -1, lightSig: -1,
     };
     this.houses.push(house);
     for (let i = 0; i < count; i += 1) {
@@ -898,6 +956,286 @@ export class VoxelHouses {
     this.groundAt = groundAt;
   }
 
+  /** Game→bake: this frame's light roster (yard lanterns + live fires). */
+  setLightSources(sources: readonly VoxelLightSource[]): void {
+    this.lightSources.length = 0;
+    for (const s of sources) this.lightSources.push(s);
+  }
+
+  /** One 색광 bake pass — house bbox vs source spheres first (most houses
+   *  skip), then seed + BFS + epsilon-gated repaint. */
+  private tickLight(): void {
+    const sources = this.lightSources;
+    let painted = false;
+    for (const house of this.houses) {
+      const { originX, originY, originZ, nx, ny, nz, size } = house;
+      const maxX = originX + nx * size;
+      const maxY = originY + ny * size;
+      const maxZ = originZ + nz * size;
+      this.lightNear.length = 0;
+      for (let s = 0; s < sources.length; s += 1) {
+        const src = sources[s];
+        // sphere vs bbox: clamp the source into the box, compare radii.
+        const dx = src.x < originX ? originX : src.x > maxX ? maxX : src.x;
+        const dy = src.y < originY ? originY : src.y > maxY ? maxY : src.y;
+        const dz = src.z < originZ ? originZ : src.z > maxZ ? maxZ : src.z;
+        const d2 = (src.x - dx) ** 2 + (src.y - dy) ** 2 + (src.z - dz) ** 2;
+        if (d2 <= src.range * src.range) this.lightNear.push(s);
+      }
+      if (this.lightNear.length === 0) {
+        if (this.clearHouseLight(house)) painted = true;
+        continue;
+      }
+      if (this.lightHouse(house, this.lightNear)) painted = true;
+    }
+    if (painted && this.mesh.instanceColor) this.mesh.instanceColor.needsUpdate = true;
+  }
+
+  private buildCoarseOcc(house: HouseVoxels): void {
+    const { nx, ny, cFactor: F, cnx, cny, cnz, cellSlot, count } = house;
+    const total = cnx * cny * cnz;
+    if (!house.cOcc || house.cOcc.length !== total) house.cOcc = new Uint8Array(total);
+    else house.cOcc.fill(0);
+    const cOcc = house.cOcc;
+    const plane = nx * ny;
+    for (let i = 0; i < count; i += 1) {
+      const cell = this.cellOf(house, house.sx[i], house.sy[i], house.sz[i]);
+      if (cellSlot[cell] !== i + 1) continue; // chewed / collapsed
+      const ix = cell % nx;
+      const iy = ((cell / nx) | 0) % ny;
+      const iz = (cell / plane) | 0;
+      const c = 1 + ((ix / F) | 0) + (1 + ((iy / F) | 0)) * cnx + (1 + ((iz / F) | 0)) * cnx * cny;
+      if (cOcc[c] < 250) cOcc[c] += 1;
+    }
+    house.cOccAlive = house.alive;
+  }
+
+  private lightHouse(house: HouseVoxels, nearIdx: number[]): boolean {
+    const { size, cFactor: F, cnx, cny, cnz, originX, originY, originZ, count, cellSlot } = house;
+    // Signature gate — same sources (position/power rounded), same census:
+    // the bake would land where it already is. Fires sit still and lanterns
+    // never move, so a calm yard pays nothing until a wall opens.
+    let sig = house.alive * 2654435761;
+    for (const s of nearIdx) {
+      const src = this.lightSources[s];
+      sig = (sig * 31 + ((src.x * 8) | 0) + ((src.y * 8) | 0) * 7 + ((src.z * 8) | 0) * 13
+        + ((src.power * 64) | 0) * 29 + ((src.range * 8) | 0) * 101) | 0;
+    }
+    if (sig === house.lightSig) return false;
+    house.lightSig = sig;
+    const cTotal = cnx * cny * cnz;
+    if (!house.cOcc || house.cOccAlive !== house.alive) this.buildCoarseOcc(house);
+    if (!house.cLight || house.cLight.length !== cTotal) house.cLight = new Float32Array(cTotal);
+    if (!house.voxLight) house.voxLight = new Float32Array(count);
+    const light = house.cLight;
+    const cOcc = house.cOcc!;
+    light.fill(0);
+    const cSize = size * F;
+    const planeC = cnx * cny;
+    // Seed — direct falloff spheres clipped to the padded grid, AIR CELLS
+    // ONLY: a wall must not pass direct light to the room behind it (the
+    // facade samples its glow from the lit air in front, at paint time).
+    // A source outside the bbox lands in the padding ring; the light wraps
+    // in from whichever face can see it.
+    for (const s of nearIdx) {
+      const src = this.lightSources[s];
+      const fx = (src.x - originX) / cSize + 1;
+      const fy = (src.y - originY) / cSize + 1;
+      const fz = (src.z - originZ) / cSize + 1;
+      const rc = Math.max(1.5, src.range / cSize);
+      const x0 = Math.max(0, Math.floor(fx - rc));
+      const x1 = Math.min(cnx - 1, Math.ceil(fx + rc));
+      const y0 = Math.max(0, Math.floor(fy - rc));
+      const y1 = Math.min(cny - 1, Math.ceil(fy + rc));
+      const z0 = Math.max(0, Math.floor(fz - rc));
+      const z1 = Math.min(cnz - 1, Math.ceil(fz + rc));
+      let seeded = 0;
+      for (let iz = z0; iz <= z1; iz += 1) {
+        for (let iy = y0; iy <= y1; iy += 1) {
+          for (let ix = x0; ix <= x1; ix += 1) {
+            const dx = ix + 0.5 - fx;
+            const dy = iy + 0.5 - fy;
+            const dz = iz + 0.5 - fz;
+            const d = Math.sqrt(dx * dx + dy * dy + dz * dz);
+            if (d >= rc) continue;
+            const c = ix + iy * cnx + iz * planeC;
+            if (cOcc[c] > 0) continue; // solid — no direct pass-through
+            const v = src.power * (1 - d / rc);
+            if (v > light[c]) light[c] = v;
+            seeded += 1;
+          }
+        }
+      }
+      // Fallback: a fire buried in dense rubble seeds nothing through air —
+      // let it warm its immediate solids or the heap reads pitch black.
+      if (seeded === 0) {
+        const r2 = 2.2;
+        const bx0 = Math.max(0, Math.floor(fx - r2));
+        const bx1 = Math.min(cnx - 1, Math.ceil(fx + r2));
+        const by0 = Math.max(0, Math.floor(fy - r2));
+        const by1 = Math.min(cny - 1, Math.ceil(fy + r2));
+        const bz0 = Math.max(0, Math.floor(fz - r2));
+        const bz1 = Math.min(cnz - 1, Math.ceil(fz + r2));
+        for (let iz = bz0; iz <= bz1; iz += 1) {
+          for (let iy = by0; iy <= by1; iy += 1) {
+            for (let ix = bx0; ix <= bx1; ix += 1) {
+              const dx = ix + 0.5 - fx;
+              const dy = iy + 0.5 - fy;
+              const dz = iz + 0.5 - fz;
+              const d = Math.sqrt(dx * dx + dy * dy + dz * dz);
+              if (d >= r2) continue;
+              const c = ix + iy * cnx + iz * planeC;
+              const v = src.power * (1 - d / r2);
+              if (v > light[c]) light[c] = v;
+            }
+          }
+        }
+      }
+    }
+    // BFS relaxation — monotone improvement drains the queue; solid
+    // fraction adds occlusion cost so interiors stay dark until a wall
+    // opens (then the firelight spills through the wound into the room).
+    let queue = this.lightBfs;
+    if (queue.length < cTotal + 8) queue = this.lightBfs = new Int32Array(cTotal * 2);
+    let tail = 0;
+    for (let c = 0; c < cTotal; c += 1) if (light[c] > LIGHT_MIN) queue[tail++] = c;
+    const maxOcc = F * F * F;
+    let head = 0;
+    while (head < tail) {
+      const c = queue[head++];
+      const l = light[c];
+      if (l <= LIGHT_MIN) continue;
+      const ix = c % cnx;
+      const iy = ((c / cnx) | 0) % cny;
+      const iz = (c / planeC) | 0;
+      for (let k = 0; k < 6; k += 1) {
+        let n = -1;
+        if (k === 0) {
+          if (ix > 0) n = c - 1;
+        } else if (k === 1) {
+          if (ix < cnx - 1) n = c + 1;
+        } else if (k === 2) {
+          if (iy > 0) n = c - cnx;
+        } else if (k === 3) {
+          if (iy < cny - 1) n = c + cnx;
+        } else if (k === 4) {
+          if (iz > 0) n = c - planeC;
+        } else if (iz < cnz - 1) {
+          n = c + planeC;
+        }
+        if (n < 0) continue;
+        const nl = l - LIGHT_AIR_COST - LIGHT_WALL_COST * (cOcc[n] / maxOcc);
+        if (nl > LIGHT_MIN && nl > light[n] + 0.004) {
+          light[n] = nl;
+          if (tail >= queue.length) {
+            const grown = new Int32Array(queue.length * 2);
+            grown.set(queue);
+            queue = this.lightBfs = grown;
+          }
+          queue[tail++] = n;
+        }
+      }
+    }
+    // Repaint — additive warm tint on the baked base, only where the
+    // baked light actually moved (keeps instanceColor uploads rare).
+    // A SOLID cell never holds direct light: the wall samples the lit air
+    // hugging its faces (either side), so the far side of a thick wall
+    // stays dark and a chewed wound glows into the room.
+    const voxLight = house.voxLight!;
+    const solidCell = Math.max(1, (maxOcc * 0.35) | 0);
+    let painted = 0;
+    const plane = house.nx * house.ny;
+    for (let i = 0; i < count; i += 1) {
+      const cell = this.cellOf(house, house.sx[i], house.sy[i], house.sz[i]);
+      const ix = cell % house.nx;
+      const iy = ((cell / house.nx) | 0) % house.ny;
+      const iz = (cell / plane) | 0;
+      const cx = 1 + ((ix / F) | 0);
+      const cy = 1 + ((iy / F) | 0);
+      const cz = 1 + ((iz / F) | 0);
+      const c = cx + cy * cnx + cz * planeC;
+      let l = light[c];
+      if (cOcc[c] >= solidCell) {
+        // wall — best-lit adjacent air cell
+        const peek = (nx2: number) => {
+          if (cOcc[nx2] >= solidCell) return;
+          if (light[nx2] > l) l = light[nx2];
+        };
+        if (cx > 0) peek(c - 1);
+        if (cx < cnx - 1) peek(c + 1);
+        if (cy > 0) peek(c - cnx);
+        if (cy < cny - 1) peek(c + cnx);
+        if (cz > 0) peek(c - planeC);
+        if (cz < cnz - 1) peek(c + planeC);
+      }
+      if (Math.abs(l - voxLight[i]) <= LIGHT_EPS) continue;
+      voxLight[i] = l;
+      if (cellSlot[cell] !== i + 1) continue; // dead slot — record only
+      this.mesh.setColorAt(house.slots[i], this.capColor.setRGB(
+        house.sr[i] + LIGHT_TINT_R * l,
+        house.sg[i] + LIGHT_TINT_G * l,
+        house.sb[i] + LIGHT_TINT_B * l,
+      ));
+      painted += 1;
+    }
+    return painted > 0;
+  }
+
+  /** Sources left the neighborhood — bake the walls back to moonlight. */
+  private clearHouseLight(house: HouseVoxels): boolean {
+    const voxLight = house.voxLight;
+    if (!voxLight) return false;
+    let painted = false;
+    for (let i = 0; i < house.count; i += 1) {
+      if (voxLight[i] <= 0) continue;
+      voxLight[i] = 0;
+      this.mesh.setColorAt(house.slots[i], this.capColor.setRGB(house.sr[i], house.sg[i], house.sb[i]));
+      painted = true;
+    }
+    return painted;
+  }
+
+  /** 색광 bake audit (QA): lit-voxel count + peak light per house. */
+  lightDebug(): Array<{ index: number; lit: number; max: number; tickMs: number }> {
+    const out: Array<{ index: number; lit: number; max: number; tickMs: number }> = [];
+    for (const house of this.houses) {
+      let lit = 0;
+      let max = 0;
+      const vl = house.voxLight;
+      if (vl) {
+        for (let i = 0; i < vl.length; i += 1) {
+          if (vl[i] > 0.05) lit += 1;
+          if (vl[i] > max) max = vl[i];
+        }
+      }
+      out.push({ index: house.index, lit, max: +max.toFixed(3), tickMs: +this.lightTickMs.toFixed(2) });
+    }
+    return out;
+  }
+
+  /** 색광 paint audit (QA): raw instanceColor rows vs baked base + L. */
+  lightPaintRows(houseIndex: number, n = 8): Array<{ base: number[]; painted: number[]; l: number }> {
+    const house = this.houses[houseIndex];
+    const buf = this.mesh.instanceColor?.array as Float32Array | undefined;
+    if (!house || !buf) return [];
+    const out: Array<{ base: number[]; painted: number[]; l: number }> = [];
+    // brightest-L voxels first — the rows that SHOULD show the tint.
+    const order = Array.from(house.voxLight ?? new Float32Array(0))
+      .map((l, i) => [l, i] as const)
+      .sort((a, b) => b[0] - a[0])
+      .slice(0, n);
+    for (const [l, i] of order) {
+      const slot = house.slots[i];
+      out.push({
+        base: [+house.sr[i].toFixed(3), +house.sg[i].toFixed(3), +house.sb[i].toFixed(3)],
+        painted: [+buf[slot * 3].toFixed(3), +buf[slot * 3 + 1].toFixed(3), +buf[slot * 3 + 2].toFixed(3)],
+        l: +l.toFixed(3),
+      });
+    }
+    return out;
+  }
+
+
   /** Rigid chunks waiting from support scans — the Game layer drains
    *  these into box3d rubble every frame. */
   drainDetachedVoxels(out: ChewedVoxel[]): number {
@@ -1015,6 +1353,15 @@ export class VoxelHouses {
       }
     }
     if (dirty) this.mesh.instanceMatrix.needsUpdate = true;
+    // 색광 bake — throttled; the epsilon gate inside keeps the color
+    // buffer quiet unless a fire actually moved or a wall opened.
+    this.lightAccum -= delta;
+    if (this.lightAccum <= 0) {
+      this.lightAccum = LIGHT_TICK;
+      const t0 = performance.now();
+      this.tickLight();
+      this.lightTickMs = this.lightTickMs * 0.8 + (performance.now() - t0) * 0.2;
+    }
     // 촛불 플리커 — slow dual-sine per pane, deterministic in game time.
     this.glowTime += delta;
     this.glowTick -= delta;
@@ -1047,6 +1394,9 @@ export class VoxelHouses {
       house.fallY = null;
       house.lastSupportScan = -1;
       house.lastScanAlive = -1;
+      house.voxLight?.fill(0); // bake state restarts cold
+      house.cOccAlive = -1;
+      house.lightSig = -1;
       house.cellSlot.fill(0);
       for (let i = 0; i < house.count; i += 1) {
         house.slots[i] = slot + i;

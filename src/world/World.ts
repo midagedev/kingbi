@@ -15,7 +15,7 @@ import type {
 import type { CheomaVillageHandle } from '@cheoma/api/village.js';
 import { createNoirGradePass, setNoirGradeResolution, setAberration, updateNoirGradePass, type NoirGradePass } from './NoirGradePass';
 import { Atmosphere } from './Atmosphere';
-import { VoxelHouses, voxelizeGroup, splitStreetData } from '../entities/VoxelHouses';
+import { VoxelHouses, voxelizeGroup, splitStreetData, type VoxelLightSource } from '../entities/VoxelHouses';
 import { createSeededRandom } from '../utils/random';
 
 export interface WorldBuildResult {
@@ -636,6 +636,13 @@ export class World {
   updateVoxelHouses(delta: number, onLand: (x: number, y: number, z: number) => void): void {
     this.voxelHouses?.update(delta, onLand);
     this.updateYardLanterns(delta);
+  }
+
+  /** 색광 전파 — the Game's light roster (yard lanterns + live fires) feeds
+   *  the voxel house bake: walls occlude, chewed wounds let the glow in,
+   *  zero extra real lights. */
+  setVoxelLightSources(sources: readonly VoxelLightSource[]): void {
+    this.voxelHouses?.setLightSources(sources);
   }
 
   /** House footprints within `radius` of a point (blast queries). */
