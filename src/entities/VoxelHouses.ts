@@ -13,7 +13,7 @@ import * as THREE from 'three';
  */
 
 /** 창호지 window-pane budget across all houses + the palace. */
-const GLOW_CAPACITY = 512;
+const GLOW_CAPACITY = 896;
 /** Rigid-chunk cap for one detachment event (the whole island still goes;
  *  the cap only bounds the rigid-body rain — stress bought 3fps at 480). */
 const DETACHED_QUEUE_MAX = 240;
@@ -654,8 +654,8 @@ export class VoxelHouses {
     const bigCell = size > 0.4;
     const bandMin = bigCell ? 1.0 : 0.75;
     const bandMax = bigCell ? 4.4 : 2.5;
-    const maxWindows = bigCell ? 30 : 10;
-    const spacingSq = (bigCell ? 4.6 : 1.7) ** 2;
+    const maxWindows = bigCell ? 30 : 12;
+    const spacingSq = (bigCell ? 4.6 : 1.55) ** 2;
     const centerX = house.originX + (house.nx * size) / 2;
     const centerZ = house.originZ + (house.nz * size) / 2;
     const picked: number[] = [];
@@ -708,9 +708,18 @@ export class VoxelHouses {
     if (!bigCell) {
       const tx = oz !== 0 ? 1 : 0;
       const tz = ox !== 0 ? 1 : 0;
-      if (this.occupiedCell(house, ix + tx, iy, iz + tz)) cells.push([ix + tx, iy, iz + tz]);
-      if (this.occupiedCell(house, ix, iy + 1, iz)) cells.push([ix, iy + 1, iz]);
-      if (cells.length > 1 && this.occupiedCell(house, ix + tx, iy + 1, iz + tz)) cells.push([ix + tx, iy + 1, iz + tz]);
+      // Pane spans a fixed WORLD size (~0.26m) regardless of the voxel
+      // grid: finer voxels stamp more cells so the 창호지 window keeps
+      // its night presence as the grid detail rises.
+      const span = Math.max(2, Math.round(0.26 / house.size));
+      for (let v = 0; v < span; v += 1) {
+        for (let u = 0; u < span; u += 1) {
+          if (u === 0 && v === 0) continue;
+          if (this.occupiedCell(house, ix + tx * u, iy + v, iz + tz * u)) {
+            cells.push([ix + tx * u, iy + v, iz + tz * u]);
+          }
+        }
+      }
     }
     // Deterministic per-window tint/phase (hash — voxelization, not gameplay rng).
     const hash = Math.abs(Math.sin(seed * 12.9898 + house.index * 78.233)) % 1;
