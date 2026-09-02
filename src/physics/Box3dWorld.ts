@@ -42,6 +42,9 @@ interface BodySlot {
   b: number;
   /** True until the first post-spawn transform write. */
   needsWrite: boolean;
+  /** Mesh-piece body (조각조각 붕괴): the visual is this scene pivot, not
+   *  an instanced row — a chunk of the ORIGINAL house model tumbling. */
+  piece: THREE.Object3D | null;
 }
 
 /** slot↔row bookkeeping with FROZEN persistence: a row owns its slot while
@@ -133,7 +136,7 @@ export class Box3dWorld {
     this.mesh.count = 0;
     this.mesh.name = 'box3d-rubble';
     for (let i = 0; i < capacity; i += 1) {
-      this.slots.push({ active: false, sx: 0.2, sy: 0.2, sz: 0.2, r: 1, g: 1, b: 1, needsWrite: true });
+      this.slots.push({ active: false, sx: 0.2, sy: 0.2, sz: 0.2, r: 1, g: 1, b: 1, needsWrite: true, piece: null });
       this.hide(this.mesh, i);
     }
 
@@ -222,6 +225,31 @@ export class Box3dWorld {
       }
     }
     return placed;
+  }
+
+  /** 조각조각 — a chunk of the ORIGINAL house mesh as a rigid body. The
+   *  pivot must already sit in the scene at the piece's world pose; its
+   *  local children keep their offsets. Eviction freezes it in place like
+   *  any rubble row (the wreck persists all night). */
+  spawnPiece(
+    pivot: THREE.Object3D,
+    hx: number, hy: number, hz: number,
+    vx: number, vy: number, vz: number,
+    avx: number, avy: number, avz: number,
+  ): boolean {
+    const slot = this.addBody(
+      pivot.position.x, pivot.position.y, pivot.position.z, hx, hy, hz, 0,
+      vx, vy, vz, avx, avy, avz,
+    );
+    if (slot < 0) return false;
+    const record = this.slots[slot];
+    record.piece = pivot;
+    // Kick-ray radius proxy: biggest half extent, generous (slabs are flat).
+    record.sx = Math.max(hx, hy, hz) * 1.15;
+    record.sy = hy;
+    record.sz = Math.max(hx, hz) * 1.15;
+    record.needsWrite = true;
+    return true;
   }
 
   /** Spawn a rubble cube; when the physics pool is full the OLDEST chunk
@@ -328,6 +356,12 @@ export class Box3dWorld {
       if (!record?.active) continue;
       const awakeBody = tagged - slot > 0.25 || record.needsWrite;
       if (!awakeBody) continue;
+      if (record.piece) {
+        record.piece.position.set(states[o], states[o + 1], states[o + 2]);
+        record.piece.quaternion.set(states[o + 3], states[o + 4], states[o + 5], states[o + 6]);
+        record.needsWrite = false;
+        continue;
+      }
       const row = this.rubbleRows.rowOf(slot);
       if (row < 0) continue;
       this.pos.set(states[o], states[o + 1], states[o + 2]);
@@ -432,6 +466,7 @@ export class Box3dWorld {
     for (let i = 0; i < this.slots.length; i += 1) {
       this.slots[i].active = false;
       this.slots[i].needsWrite = true;
+      this.slots[i].piece = null;
       this.hide(this.mesh, i);
     }
     this.rubbleOrder.length = 0;

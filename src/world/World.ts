@@ -16,6 +16,7 @@ import type { CheomaVillageHandle } from '@cheoma/api/village.js';
 import { createNoirGradePass, setNoirGradeResolution, setAberration, updateNoirGradePass, type NoirGradePass } from './NoirGradePass';
 import { Atmosphere } from './Atmosphere';
 import { VoxelHouses, voxelizeGroup, splitStreetData, type VoxelLightSource } from '../entities/VoxelHouses';
+import { MeshHouses } from '../entities/MeshHouses';
 import { createSeededRandom } from '../utils/random';
 
 export interface WorldBuildResult {
@@ -75,8 +76,10 @@ export class World {
   private obstacleBoxes: THREE.Box3[] = [];
   /** The four destructible yard houses — rendered as chewable voxel cubes
    *  (see VoxelHouses); the record here is the collision footprint. */
-  private houses: Array<{ x: number; z: number; box: THREE.Box3 }> = [];
+  private houses: Array<{ x: number; z: number; box: THREE.Box3; vox: number; mesh: number }> = [];
   private voxelHouses: VoxelHouses | null = null;
+  /** 마당 원본 한옥 — real cheoma models, chipped apart piece by piece. */
+  private meshHouses: MeshHouses | null = null;
   private readonly rand = createSeededRandom(20260815);
   private disposed = false;
 
@@ -248,6 +251,17 @@ export class World {
   private disposeYardHouses(): void {
     this.voxelHouses?.dispose();
     this.voxelHouses = null;
+    // 마당 원본 한옥 해제 — pieces glow 먼저 접고, cheoma 소유권 규칙대로
+    // 파생 리소스만 disposeBuilding이 정리한다(공유 팔레트는 생존).
+    if (this.meshHouses) {
+      this.meshHouses.reset();
+      for (const house of this.houses) {
+        const root = house.mesh >= 0 ? this.meshHouses.houseRoot(house.mesh) : null;
+        if (root) disposeBuilding(root);
+      }
+      this.meshHouses.dispose();
+      this.meshHouses = null;
+    }
     this.disposeYardLanterns();
     this.obstacleBoxes = this.obstacleBoxes.filter((box) =>
       !this.houses.some((house) => house.box === box));
@@ -390,6 +404,7 @@ export class World {
   resetYardHouses(): void {
     this.shadowStale = true;
     this.voxelHouses?.reset();
+    this.meshHouses?.reset();
     this.obstacleBoxes = this.houses.map((house) => house.box.clone());
   }
 
@@ -428,14 +443,16 @@ export class World {
     // openings read at close range), the village thatch at mid distance
     // runs coarse, the palace backdrop coarsest. Shape where you look,
     // budget where you don't.
-    const size = this.compact ? 0.22 : 0.16;
     const streetSize = this.compact ? 0.36 : 0.3;
     const palaceSize = this.compact ? 0.68 : 0.7;
     const groundAt = this.queries().heightAt;
     const jitterRng = createSeededRandom((seed ^ 0x7ee1) >>> 0);
     // Shared palettes per style (cheoma's own material sharing).
     const palettes = new Map<string, unknown>();
-    const results: Array<{ x: number; z: number; vox?: number; data: ReturnType<typeof voxelizeGroup> }> = [];
+    // 마당 6채는 원본 메시 그대로 — real geometry, real materials, and
+    // 조각조각 destruction (MeshHouses chips 부재 off under fire). The
+    // voxel LOD below only carries the STREET strips + palace backdrop.
+    this.meshHouses = new MeshHouses(this.scene);
     for (const spec of specs) {
       const source = buildBuilding({
         ...PRESETS[spec.style],
@@ -447,9 +464,11 @@ export class World {
       const z = cz + spec.dz;
       source.position.set(x, groundAt(x, z), z);
       source.rotation.y = spec.rot;
-      const data = voxelizeGroup(source, spec.vox ?? size, jitterRng);
-      results.push({ x, z, vox: spec.vox, data });
-      disposeBuilding(source);
+      this.scene.add(source);
+      const meshIndex = this.meshHouses.addHouse(source, x, z);
+      const box = new THREE.Box3().setFromObject(source);
+      this.houses.push({ x, z, box, vox: -1, mesh: meshIndex });
+      this.obstacleBoxes.push(box.clone());
     }
     // The palace joins the same chewable street: its polygonal meshes go
     // dark and the cubes carry it — the fallen backdrop can now be carved
@@ -524,19 +543,11 @@ export class World {
       console.info('[street-voxelize]', `buildings=${streetDatas.length} cubes=${streetCubes}`);
     }
     const total =
-      results.reduce((sum, r) => sum + (r.data ? r.data.sx.length : 0), 0) +
       streetDatas.reduce((sum, d) => sum + d.sx.length, 0) +
       (palaceData ? palaceData.sx.length : 0);
     if (total === 0) return;
     this.voxelHouses = new VoxelHouses(this.scene, total);
     this.voxelHouses.setGroundAt(groundAt);
-    for (const result of results) {
-      if (!result.data) continue;
-      const index = this.voxelHouses.addHouse(result.data, result.vox ?? size);
-      if (index < 0) break;
-      this.houses.push({ x: result.x, z: result.z, box: result.data.box });
-      this.obstacleBoxes.push(result.data.box.clone());
-    }
     for (const data of streetDatas) {
       const index = this.voxelHouses.addHouse(data, streetSize);
       if (index < 0) break;
@@ -546,6 +557,8 @@ export class World {
         x: (data.box.min.x + data.box.max.x) / 2,
         z: (data.box.min.z + data.box.max.z) / 2,
         box: data.box.clone(),
+        vox: index,
+        mesh: -1,
       });
     }
     if (palaceData) {
@@ -556,6 +569,8 @@ export class World {
           x: (palaceData.box.min.x + palaceData.box.max.x) / 2,
           z: (palaceData.box.min.z + palaceData.box.max.z) / 2,
           box: palaceData.box.clone(),
+          vox: index,
+          mesh: -1,
         });
       }
     }
@@ -635,6 +650,7 @@ export class World {
   /** Collapse tick — drives the pancake animation, dusts landings. */
   updateVoxelHouses(delta: number, onLand: (x: number, y: number, z: number) => void): void {
     this.voxelHouses?.update(delta, onLand);
+    this.meshHouses?.update(delta);
     this.updateYardLanterns(delta);
   }
 
@@ -645,12 +661,49 @@ export class World {
     this.voxelHouses?.setLightSources(sources);
   }
 
+  /** The unified house table — yard mesh first, then street + palace voxels. */
+  houseRecord(index: number): { x: number; z: number; box: THREE.Box3; vox: number; mesh: number } | null {
+    return this.houses[index] ?? null;
+  }
+
+  get houseCount(): number {
+    return this.houses.length;
+  }
+
+  /** Unified slot → house-table index (mesh collapse path). */
+  meshHouseSlot(meshIndex: number): number {
+    for (let i = 0; i < this.houses.length; i += 1) {
+      if (this.houses[i].mesh === meshIndex) return i;
+    }
+    return -1;
+  }
+
+  /** Unified collapse check across mesh (마당) and voxel (거리·궁) houses. */
+  houseIsCollapsed(index: number): boolean {
+    const record = this.houses[index];
+    if (!record) return true;
+    if (record.mesh >= 0) return this.meshHouses?.isCollapsed(record.mesh) ?? true;
+    return this.voxelHouses?.isCollapsed(record.vox) ?? true;
+  }
+
+  /** Damage truth, 1 = intact (voxel alive ratio / mesh standing fraction). */
+  houseAliveRatio(index: number): number {
+    const record = this.houses[index];
+    if (!record) return 0;
+    if (record.mesh >= 0) return this.meshHouses ? 1 - this.meshHouses.fraction(record.mesh) : 0;
+    return this.voxelHouses ? this.voxelHouses.aliveRatio(record.vox) : 0;
+  }
+
+  meshHouseManager(): MeshHouses | null {
+    return this.meshHouses;
+  }
+
   /** House footprints within `radius` of a point (blast queries). */
   houseIndicesNear(x: number, z: number, radius: number): number[] {
     const rSq = radius * radius;
     const out: number[] = [];
     this.houses.forEach((house, index) => {
-      if (this.voxelHouses?.isCollapsed(index)) return;
+      if (this.houseIsCollapsed(index)) return;
       const cx = Math.max(house.box.min.x, Math.min(x, house.box.max.x));
       const cz = Math.max(house.box.min.z, Math.min(z, house.box.max.z));
       const dx = cx - x;
@@ -671,7 +724,7 @@ export class World {
   ): { index: number; dist: number; x: number; y: number; z: number } | null {
     const candidates: Array<{ index: number; t: number }> = [];
     this.houses.forEach((house, index) => {
-      if (this.voxelHouses?.isCollapsed(index)) return;
+      if (this.houseIsCollapsed(index)) return;
       const box = house.box;
       const tx1 = (box.min.x - ox) / dx;
       const tx2 = (box.max.x - ox) / dx;
@@ -689,9 +742,18 @@ export class World {
         ? { index: first.index, dist: first.t, x: ox + dx * first.t, y: oy + dy * first.t, z: oz + dz * first.t }
         : null;
     }
+    const rayOrigin = new THREE.Vector3(ox, oy, oz);
+    const rayDir = new THREE.Vector3(dx, dy, dz).normalize();
     for (const candidate of candidates) {
-      const march = this.voxelHouses.raycastCell(
-        candidate.index, ox, oy, oz, dx, dy, dz, maxDist,
+      const record = this.houses[candidate.index];
+      if (record.mesh >= 0) {
+        // 마당 한옥 — exact hit on the REAL geometry (doors, eaves, 창호).
+        const hit = this.meshHouses?.raycast(record.mesh, rayOrigin, rayDir, maxDist);
+        if (hit) return { index: candidate.index, dist: hit.dist, x: hit.x, y: hit.y, z: hit.z };
+        continue;
+      }
+      const march = this.voxelHouses!.raycastCell(
+        record.vox, ox, oy, oz, dx, dy, dz, maxDist,
       );
       if (march) return { index: candidate.index, dist: march.dist, x: march.x, y: march.y, z: march.z };
     }
@@ -703,8 +765,8 @@ export class World {
     return this.houses.map((house, index) => ({
       x: +house.x.toFixed(1),
       z: +house.z.toFixed(1),
-      visible: !this.voxelHouses?.isCollapsed(index),
-      alive: this.voxelHouses ? +this.voxelHouses.aliveRatio(index).toFixed(2) : 1,
+      visible: !this.houseIsCollapsed(index),
+      alive: +this.houseAliveRatio(index).toFixed(2),
     }));
   }
 

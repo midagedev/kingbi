@@ -264,6 +264,8 @@ export class Game {
     }
     if (!physicsOk) console.warn('box3d wasm 미로딩 — 러블 비활성');
     console.info(`[box3d] ready=${physicsOk} bodies=${this.rubble.bodyCount} cap=${this.rubble.capacity}`);
+    // 조각조각 — mesh-house 부재 파편도 같은 물리 풀에서 굴러간다.
+    this.world.meshHouseManager()?.bindPhysics(physicsOk ? this.rubble : null);
     onReady(true, 'ready');
   }
 
@@ -1179,8 +1181,14 @@ export class Game {
    *  carries them away. Hits spark, crack and dust; the house erodes where
    *  you aim. Past the structure threshold the whole thing pancakes. */
   private chewHouse(index: number, x: number, y: number, z: number, dirX: number, dirZ: number, radius: number): void {
+    const record = this.world.houseRecord(index);
+    if (!record) return;
+    if (record.mesh >= 0) {
+      this.chewMeshHouse(record.mesh, x, y, z, dirX, dirZ, radius);
+      return;
+    }
     const vox = this.world.voxelHouseManager();
-    if (!vox || vox.isCollapsed(index)) return;
+    if (!vox || vox.isCollapsed(record.vox)) return;
     this.chewScratch.length = 0;
     // Entry burst — the face splinters back toward the gun (a spray, not a jet).
     vox.chew(x, y, z, radius, this.chewScratch);
@@ -1240,19 +1248,61 @@ export class Game {
     }
     // 화재 점화(붕괴 전) — a hard-chewed house catches BEFORE it pancakes;
     // the burn bites below then devour it until the threshold sweep fells it.
-    if (vox.aliveRatio(index) < 0.88 && this.fires) {
+    if (vox.aliveRatio(record.vox) < 0.88 && this.fires) {
       this.fires.ignite(x, this.world.queries().heightAt(x, z), z, 0.85, () => this.rng());
     }
-    if (vox.aliveRatio(index) < 0.78) this.collapseHouse(index);
+    if (vox.aliveRatio(record.vox) < 0.78) this.collapseHouse(index);
+  }
+
+  /** 마당 한옥 조각조각 — the bullet slams THROUGH: entry spall back at
+   *  the gun, the far wall blows out along the shot. No HP ledger — the
+   *  chipped fraction decides when the wreck smolders and when it gives. */
+  private chewMeshHouse(meshIndex: number, x: number, y: number, z: number, dirX: number, dirZ: number, radius: number): void {
+    const mesh = this.world.meshHouseManager();
+    if (!mesh || mesh.isCollapsed(meshIndex)) return;
+    const count = Math.max(2, Math.min(6, Math.round(radius * 1.6)));
+    mesh.chipAt(meshIndex, x, y, z, dirX, dirZ, count, () => this.rng());
+    // Grit + spray sell the impact; the big pieces ARE the house.
+    const groundAt = this.world.queries().heightAt;
+    for (let i = 0; i < 6; i += 1) {
+      const t = this.rng();
+      this.rubble?.spawnRubble(
+        x + (this.rng() - 0.5) * 0.8, y + this.rng() * 0.6, z + (this.rng() - 0.5) * 0.8,
+        0.06 + this.rng() * 0.08, 0.32 + t * 0.1, 0.24 + t * 0.08, 0.16 + t * 0.05,
+        dirX * (6 + this.rng() * 9) + (this.rng() - 0.5) * 6,
+        2 + this.rng() * 4,
+        dirZ * (6 + this.rng() * 9) + (this.rng() - 0.5) * 6,
+        (this.rng() - 0.5) * 15, (this.rng() - 0.5) * 12, (this.rng() - 0.5) * 15,
+      );
+    }
+    this.vfx.hitSpark(x, y, z, dirX, dirZ, () => this.rng());
+    this.vfx.demolitionDust(x, y + 0.5, z, 6, () => this.rng());
+    if (this.woodSfxTimer <= 0) {
+      this.woodSfxTimer = 0.07;
+      this.audio.armorClank();
+    }
+    this.shakeTrauma = Math.min(1, this.shakeTrauma + 0.03);
+    // 떨어진 만큼 탄다 — enough wreckage gone and the wreck smolders.
+    if (mesh.consumeIgnite(meshIndex) && this.fires) {
+      const center = mesh.houseCenter(meshIndex);
+      this.fires.ignite(center.x, groundAt(center.x, center.z), center.z, 1, () => this.rng());
+    }
+    if (mesh.shouldCollapse(meshIndex)) this.collapseHouse(this.world.meshHouseSlot(meshIndex));
   }
 
   /** 구조 붕괴 — the remaining cubes pancake roof-first; the street loses
    *  a building, the talisman drinks its due. */
   private collapseHouse(index: number): void {
+    const record = this.world.houseRecord(index);
+    if (!record) return;
+    if (record.mesh >= 0) {
+      this.collapseMeshHouse(record.mesh);
+      return;
+    }
     const vox = this.world.voxelHouseManager();
-    if (!vox || vox.isCollapsed(index)) return;
-    const center = vox.houseCenter(index);
-    const isPalace = this.world.palaceVoxelIndex === index;
+    if (!vox || vox.isCollapsed(record.vox)) return;
+    const center = vox.houseCenter(record.vox);
+    const isPalace = this.world.palaceVoxelIndex === record.vox;
     // A slice of the structure becomes REAL rigid bodies — the rest rides
     // the staged fall animation; the bodies pile where they land.
     this.chewScratch.length = 0;
@@ -1272,7 +1322,7 @@ export class Game {
         );
       }
     }
-    vox.triggerCollapse(index, () => this.rng());
+    vox.triggerCollapse(record.vox, () => this.rng());
     // 화재 — the pancaked building burns until dawn: flames over the
     // wreckage, a warm spill across the yard, and every 원귀 near the
     // fire drags a long shadow away from it.
@@ -1290,6 +1340,40 @@ export class Game {
     this.world.clearObstaclesNear(center.x, center.z, 12);
   }
 
+  /** 마당 한옥 붕괴 — every remaining 부재 gives at once: the frame
+   *  comes apart into rigid pieces that crash outward, the wreck burns,
+   *  and the yard keeps the pile until dawn. */
+  private collapseMeshHouse(meshIndex: number): void {
+    const mesh = this.world.meshHouseManager();
+    if (!mesh || mesh.isCollapsed(meshIndex)) return;
+    const center = mesh.houseCenter(meshIndex);
+    mesh.collapse(meshIndex, () => this.rng());
+    // Grit fills the gaps between the big pieces — the crash reads solid.
+    for (let i = 0; i < 26; i += 1) {
+      const a = this.rng() * Math.PI * 2;
+      const t = this.rng();
+      this.rubble?.spawnRubble(
+        center.x + Math.cos(a) * (1 + this.rng() * 3), center.y + this.rng() * 2, center.z + Math.sin(a) * (1 + this.rng() * 3),
+        0.08 + this.rng() * 0.14, 0.30 + t * 0.12, 0.22 + t * 0.09, 0.14 + t * 0.05,
+        Math.cos(a) * (2 + this.rng() * 4), 1 + this.rng() * 5, Math.sin(a) * (2 + this.rng() * 4),
+        (this.rng() - 0.5) * 12, (this.rng() - 0.5) * 10, (this.rng() - 0.5) * 12,
+      );
+    }
+    this.fires?.ignite(center.x, this.world.queries().heightAt(center.x, center.z), center.z, 1, () => this.rng());
+    this.rubble?.kickNear(center.x, center.y, center.z, 6, 10);
+    this.shakeTrauma = Math.min(1, this.shakeTrauma + 0.5);
+    this.fovPunch = Math.min(1.4, this.fovPunch + 0.6);
+    this.world.impactAberration(1.4);
+    this.slowmoTimer = Math.max(this.slowmoTimer, 0.4);
+    this.audio.boom();
+    this.audio.drum(0.7);
+    this.audio.roar();
+    this.vfx.demolitionDust(center.x, center.y + 2, center.z, 22, () => this.rng());
+    this.debris?.chipBurst(center.x, center.y + 1, center.z, 0, 0, 22, () => this.rng());
+    this.sealCharge = Math.min(1, this.sealCharge + 0.2);
+    this.world.clearObstaclesNear(center.x, center.z, 12);
+  }
+
   private dx01(v: number): number { return v / (Math.abs(v) + 1); }
   private dz01(v: number): number { return v / (Math.abs(v) + 1); }
 
@@ -1297,9 +1381,9 @@ export class Game {
   private debugChewAt(x: number, z: number, y: number, radius: number): number {
     const indices = this.world.houseIndicesNear(x, z, 6);
     if (indices.length === 0) return 0;
-    const before = this.world.voxelHouseManager()?.aliveRatio(indices[0]) ?? 1;
+    const before = this.world.houseAliveRatio(indices[0]);
     this.chewHouse(indices[0], x, y, z, 0.2, -1, radius);
-    const after = this.world.voxelHouseManager()?.aliveRatio(indices[0]) ?? 1;
+    const after = this.world.houseAliveRatio(indices[0]);
     return Math.round((before - after) * 1000);
   }
 
@@ -1579,6 +1663,7 @@ export class Game {
     // bullet involved — sweep it here so the pancake follows the rain.
     {
       const vox = this.world.voxelHouseManager();
+      const meshHouses = this.world.meshHouseManager();
       if (vox) {
         // 불은 집을 먹는다 — every live fire pops a slow devour bite: the
         // house sheds burning flakes on its own until the threshold sweeps
@@ -1589,7 +1674,21 @@ export class Game {
             this.chewScratch.length = 0;
             let eaten = 0;
             for (const index of this.world.houseIndicesNear(bite.x, bite.z, 6)) {
-              if (vox.isCollapsed(index)) continue;
+              const record = this.world.houseRecord(index);
+              if (!record) continue;
+              if (record.mesh >= 0) {
+                // 불은 한옥을 먹는다 — the fire gnaws 부재 off the mesh
+                // house; no rubble cubes, the beams themselves fall.
+                if (!meshHouses || meshHouses.isCollapsed(record.mesh)) continue;
+                meshHouses.chipAt(record.mesh, bite.x, bite.y + this.rng() * 0.5, bite.z, 0, 0, 1, () => this.rng());
+                if (meshHouses.consumeIgnite(record.mesh) && this.fires) {
+                  const center = meshHouses.houseCenter(record.mesh);
+                  this.fires.ignite(center.x, this.world.queries().heightAt(center.x, center.z), center.z, 1, () => this.rng());
+                }
+                eaten += 1;
+                continue;
+              }
+              if (vox.isCollapsed(record.vox)) continue;
               eaten += vox.chew(bite.x, bite.y + this.rng() * 0.5, bite.z, 0.5 + this.rng() * 0.6 * bite.scale, this.chewScratch);
             }
             if (eaten > 0 && this.rubble?.ready) {
@@ -1621,8 +1720,14 @@ export class Game {
             }
           }
         }
-        for (let i = 0; i < vox.houseCount; i += 1) {
-          if (!vox.isCollapsed(i) && vox.aliveRatio(i) < 0.78) this.collapseHouse(i);
+        for (let i = 0; i < this.world.houseCount; i += 1) {
+          const record = this.world.houseRecord(i);
+          if (!record) continue;
+          if (record.mesh >= 0) {
+            if (meshHouses?.shouldCollapse(record.mesh)) this.collapseHouse(i);
+          } else if (!vox.isCollapsed(record.vox) && vox.aliveRatio(record.vox) < 0.78) {
+            this.collapseHouse(i);
+          }
         }
       }
     }
@@ -2048,6 +2153,11 @@ export class Game {
       /** Chew cubes out of the nearest house (voxel demolition QA). */
       chewHouseAt: (x: number, z: number, y = 2, radius = 1.2) =>
         this.debugChewAt(x, z, y, radius),
+      /** 마당 한옥 상태 — parts/chipped/창호지 (QA). */
+      meshHouseInfo: () => {
+        const mgr = this.world.meshHouseManager();
+        return { houses: mgr?.info() ?? [], windows: mgr?.windowPanes ?? 0 };
+      },
       /** Per-house interior audit — enclosed room voids vs solid fill. */
       voxelHollow: () => this.world.voxelHouseManager()?.hollowDebug() ?? [],
       /** 색광 bake audit — lit voxels + peak light per house. */
@@ -2073,6 +2183,7 @@ export class Game {
         survivedSeconds: this.elapsed,
         isRecord: false,
       }).toDataURL('image/png'),
+      yardHouses: () => this.world.yardHouses(),
       defenseRig: () => ({
         gunX: this.gunX,
         gunY: this.gunGroundY,
@@ -2143,6 +2254,7 @@ export class Game {
       spin: this.spin,
       kills: this.kills,
       rubble: this.rubble ? this.rubble.bodyCount : -2,
+      fires: this.fires ? this.fires.fireCount : -1,
       rubbleVisual: this.rubble ? this.rubble.rubbleVisual : -2,
       windows: this.world.voxelHouseManager()?.glowMesh.count ?? -1,
       physMs: +this.physMs.toFixed(2),

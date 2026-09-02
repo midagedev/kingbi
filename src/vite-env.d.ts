@@ -55,6 +55,8 @@ interface ThreeGameTestHooks {
   collapseHouseAt(x: number, z: number): void;
   /** Per-house interior audit — enclosed room voids vs solid fill (QA). */
   voxelHollow(): Array<{ index: number; cells: number; voids: number; layers: number; layersWithVoids: number }>;
+  /** 마당 원본 한옥 상태 — parts/chipped/창호지 수 (QA). */
+  meshHouseInfo(): { houses: Array<{ index: number; parts: number; chipped: number; fraction: number; ignited: boolean; collapsed: boolean }>; windows: number };
   /** 색광 bake audit — lit voxels + peak propagated light per house (QA). */
   voxelLightDebug(): Array<{ index: number; lit: number; max: number; tickMs: number }>;
   /** 색광 paint audit — brightest-L rows of a house: base vs painted rgb. */
@@ -78,6 +80,7 @@ interface ThreeGameTestHooks {
     fov?: number,
   ): void;
   /** Defense anchors for capture rigs: gun emplacement + gate mouth. */
+  yardHouses(): Array<{ x: number; z: number; visible: boolean; alive: number }>;
   defenseRig(): { gunX: number; gunY: number; gunZ: number; gateX: number; gateY: number; gateZ: number };
   /** Terrain + staging probe (heights profile, houses, obstacles). */
   stageDebug(): Record<string, unknown>;
