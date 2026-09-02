@@ -88,6 +88,8 @@ interface ThreeGameTestHooks {
   villageMaterialInfo(): Array<{ array: boolean; groups: number; indexed: boolean }>;
   /** Draw census by scene root — the "what eats the frame" probe. */
   sceneCensus(): Array<{ root: string; meshes: number; visible: number; tris: number }>;
+  palacePlan(): Record<string, unknown> | null;
+  palaceMergedStats(): { found: boolean; meshes: number; visible: boolean; tris: number };
   /** Toggle a composer pass by constructor name (WebKit/Safari debugging). */
   setPostPassEnabled(name: string, enabled: boolean): boolean;
   /** Scale the desktop IBL envmap (0 = off) — wash probes. */

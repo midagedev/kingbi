@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { createVillageAsync } from '@cheoma/api/village.js';
-import { buildBuilding, disposeBuilding, PRESETS } from '@cheoma/api/building.js';
+import { buildBuilding, buildPalaceCompound, disposeBuilding, PRESETS } from '@cheoma/api/building.js';
 import {
   setupEnvironment,
   setupPost,
@@ -76,7 +76,7 @@ export class World {
   private obstacleBoxes: THREE.Box3[] = [];
   /** The four destructible yard houses — rendered as chewable voxel cubes
    *  (see VoxelHouses); the record here is the collision footprint. */
-  private houses: Array<{ x: number; z: number; box: THREE.Box3; vox: number; mesh: number }> = [];
+  private houses: Array<{ x: number; z: number; box: THREE.Box3; vox: number; mesh: number; palace?: boolean }> = [];
   private voxelHouses: VoxelHouses | null = null;
   /** 마당 원본 한옥 — real cheoma models, chipped apart piece by piece. */
   private meshHouses: MeshHouses | null = null;
@@ -444,7 +444,6 @@ export class World {
     // runs coarse, the palace backdrop coarsest. Shape where you look,
     // budget where you don't.
     const streetSize = this.compact ? 0.36 : 0.3;
-    const palaceSize = this.compact ? 0.68 : 0.7;
     const groundAt = this.queries().heightAt;
     const jitterRng = createSeededRandom((seed ^ 0x7ee1) >>> 0);
     // Shared palettes per style (cheoma's own material sharing).
@@ -470,38 +469,45 @@ export class World {
       this.houses.push({ x, z, box, vox: -1, mesh: meshIndex });
       this.obstacleBoxes.push(box.clone());
     }
-    // The palace joins the same chewable street: its polygonal meshes go
-    // dark and the cubes carry it — the fallen backdrop can now be carved
-    // apart from the gun line, and it pancakes like everything else.
+    // The palace keeps its REAL look — the village's merged copy renders
+    // it (103 meshes, cheap), and a same-seed part-structured twin stands
+    // INVISIBLE beside it as the destruction book: bullets chip 전각 부재
+    // off the twin (they fly as real pieces), the merged copy hides when
+    // the whole compound gives. The old voxel palace (58.9k cubes ≈ 707k
+    // triangles) is retired.
     this.palaceVoxelIndex = -1;
-    let palaceData: ReturnType<typeof voxelizeGroup> = null;
+    this.palaceMeshIndex = -1;
     let streetDatas: ReturnType<typeof splitStreetData> = [];
     const villageRoot = this.scene.children.find((child) => (child.name ?? '').startsWith('village'));
     if (villageRoot) {
-      // The village group spans the whole mountain (582m) — filter to the
-      // palace compound only, or the grid drowns and the voxelize no-ops
-      // (the silent "궁이 안 부서진다" bug).
-      const palaceGroundY = groundAt(cx, cz - 110);
-      const palaceFilter = { cx: cx, cz: cz - 110, rx: 58, rz: 42, yMax: palaceGroundY + 22 };
-      palaceData = voxelizeGroup(villageRoot as THREE.Group, palaceSize, jitterRng, palaceFilter);
-      console.info('[palace-voxelize]', palaceData
-        ? `cubes=${palaceData.sx.length} box=${((palaceData.box.max.x - palaceData.box.min.x) || 0).toFixed(0)}x${((palaceData.box.max.y - palaceData.box.min.y) || 0).toFixed(0)}x${((palaceData.box.max.z - palaceData.box.min.z) || 0).toFixed(0)}`
-        : 'NULL');
-      if (palaceData) {
-        villageRoot.traverse((object) => {
-          const mesh = object as THREE.Mesh;
-          if (!mesh.isMesh || !mesh.geometry) return;
-          if (!mesh.geometry.boundingBox) mesh.geometry.computeBoundingBox();
-          const bb = mesh.geometry.boundingBox;
-          if (!bb) return;
-          const withinX = Math.max(bb.min.x + mesh.matrixWorld.elements[12], palaceFilter.cx - palaceFilter.rx)
-            <= Math.min(bb.max.x + mesh.matrixWorld.elements[12], palaceFilter.cx + palaceFilter.rx);
-          const withinZ = Math.max(bb.min.z + mesh.matrixWorld.elements[14], palaceFilter.cz - palaceFilter.rz)
-            <= Math.min(bb.max.z + mesh.matrixWorld.elements[14], palaceFilter.cz + palaceFilter.rz);
-          const belowY = bb.min.y + mesh.matrixWorld.elements[13] <= palaceFilter.yMax;
-          if (withinX && withinZ && belowY) mesh.visible = false;
+      const palacePlan = this.village?.plan?.features?.palace;
+      if (palacePlan && this.meshHouses && Number.isFinite(palacePlan.x) && Number.isFinite(palacePlan.z)) {
+        const compound = buildPalaceCompound({
+          w: palacePlan.plotW || 60,
+          d: palacePlan.plotD || 90,
+          tier: palacePlan.tier || 'capital',
+          variant: palacePlan.variant || 'axial',
+          seed: palacePlan.seed || 5,
+        });
+        const rotationY = Math.atan2(palacePlan.frontDir?.x ?? 0, palacePlan.frontDir?.z ?? 1);
+        compound.rotation.y = rotationY;
+        compound.position.set(palacePlan.x, groundAt(palacePlan.x, palacePlan.z), palacePlan.z);
+        this.scene.add(compound);
+        this.palaceMeshIndex = this.meshHouses.addHouse(compound, palacePlan.x, palacePlan.z, { shadow: true, coarse: true });
+        this.houses.push({
+          x: palacePlan.x,
+          z: palacePlan.z,
+          box: new THREE.Box3().setFromObject(compound),
+          vox: -1,
+          mesh: this.palaceMeshIndex,
+          palace: true,
         });
       }
+      this.meshHouses.onCollapse = (meshIndex) => {
+        if (meshIndex !== this.palaceMeshIndex) return;
+        this.setPalaceMergedVisible(false);
+      };
+      this.meshHouses.onResetCallback = () => this.setPalaceMergedVisible(true);
 
       // 초가집 거리 — the village's own thatch rows between the 기와 pair
       // and the palace join the chewable street. TWO SIDE STRIPS: the center
@@ -542,9 +548,7 @@ export class World {
       }
       console.info('[street-voxelize]', `buildings=${streetDatas.length} cubes=${streetCubes}`);
     }
-    const total =
-      streetDatas.reduce((sum, d) => sum + d.sx.length, 0) +
-      (palaceData ? palaceData.sx.length : 0);
+    const total = streetDatas.reduce((sum, d) => sum + d.sx.length, 0);
     if (total === 0) return;
     this.voxelHouses = new VoxelHouses(this.scene, total);
     this.voxelHouses.setGroundAt(groundAt);
@@ -561,24 +565,27 @@ export class World {
         mesh: -1,
       });
     }
-    if (palaceData) {
-      const index = this.voxelHouses.addHouse(palaceData, palaceSize);
-      if (index >= 0) {
-        this.palaceVoxelIndex = index;
-        this.houses.push({
-          x: (palaceData.box.min.x + palaceData.box.max.x) / 2,
-          z: (palaceData.box.min.z + palaceData.box.max.z) / 2,
-          box: palaceData.box.clone(),
-          vox: index,
-          mesh: -1,
-        });
-      }
-    }
     this.shadowStale = true;
+  }
+
+  /** The village's merged palace twin — hidden the moment our part
+   *  structure collapses, re-shown on reset. */
+  private setPalaceMergedVisible(visible: boolean): void {
+    const villageRoot = this.scene.children.find((child) => (child.name ?? '').startsWith('village'));
+    if (!villageRoot) return;
+    villageRoot.traverse((object) => {
+      if (object.name === 'palace-merged') {
+        object.visible = visible;
+        // traverse() doesn't descend by visibility — flip descendants too.
+        object.traverse((child) => { child.visible = visible; });
+      }
+    });
   }
 
   /** Voxel index of the palace (special collapse copy) or -1. */
   palaceVoxelIndex = -1;
+  /** Shadow mesh-house slot of the palace (special collapse copy) or -1. */
+  palaceMeshIndex = -1;
 
   /** Autopsy of the village mesh group's bounds (guarded) + voxel grid math. */
   villageMaterialInfo(): Array<{ array: boolean; groups: number; indexed: boolean; box?: string }> {
@@ -662,7 +669,7 @@ export class World {
   }
 
   /** The unified house table — yard mesh first, then street + palace voxels. */
-  houseRecord(index: number): { x: number; z: number; box: THREE.Box3; vox: number; mesh: number } | null {
+  houseRecord(index: number): { x: number; z: number; box: THREE.Box3; vox: number; mesh: number; palace?: boolean } | null {
     return this.houses[index] ?? null;
   }
 
@@ -748,8 +755,15 @@ export class World {
       const record = this.houses[candidate.index];
       if (record.mesh >= 0) {
         // 마당 한옥 — exact hit on the REAL geometry (doors, eaves, 창호).
+        // The 궁 is coarse (backdrop): its bounding slab stands in for the
+        // ray test — at 110m the approximation is invisible, and 428-mesh
+        // triangle tests per bullet are not.
         const hit = this.meshHouses?.raycast(record.mesh, rayOrigin, rayDir, maxDist);
         if (hit) return { index: candidate.index, dist: hit.dist, x: hit.x, y: hit.y, z: hit.z };
+        if (record.palace) {
+          const t = candidate.t;
+          return { index: candidate.index, dist: t, x: ox + dx * t, y: oy + dy * t, z: oz + dz * t };
+        }
         continue;
       }
       const march = this.voxelHouses!.raycastCell(
@@ -768,6 +782,33 @@ export class World {
       visible: !this.houseIsCollapsed(index),
       alive: +this.houseAliveRatio(index).toFixed(2),
     }));
+  }
+
+  /** 궁 플랜 원본 (QA/전환 조사) — the village's own palace feature. */
+  palacePlan(): Record<string, unknown> | null {
+    const palace = this.village?.plan?.features?.palace;
+    return palace ?? null;
+  }
+
+  /** palace-merged 서브트리 통계 (QA). */
+  palaceMergedStats(): { found: boolean; meshes: number; visible: boolean; tris: number } {
+    const villageRoot = this.scene.children.find((child) => (child.name ?? '').startsWith('village'));
+    let found = false;
+    let meshes = 0;
+    let tris = 0;
+    let visible = true;
+    villageRoot?.traverse((object) => {
+      if (object.name === 'palace-merged') {
+        found = true;
+        visible = object.visible;
+      }
+      if (found && (object as THREE.Mesh).isMesh) {
+        meshes += 1;
+        const geo = (object as THREE.Mesh).geometry as THREE.BufferGeometry | undefined;
+        if (geo?.attributes?.position) tris += (geo.attributes.position.count / 3) | 0;
+      }
+    });
+    return { found, meshes, visible, tris };
   }
 
   /** Draw census by top-level scene ancestor — the "what is eating the

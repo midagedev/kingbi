@@ -13,8 +13,8 @@ import type { Box3dWorld } from '../physics/Box3dWorld';
  * no rebuild, no dispose, the night restarts with the village standing.
  */
 
-/** 창호지 pane budget across all mesh houses. */
-const GLOW_CAPACITY = 256;
+/** 창호지 pane budget across all mesh houses (the 궁 adds hundreds). */
+const GLOW_CAPACITY = 768;
 /** Chip thresholds (fraction of the house's fracture parts gone):
  *  past IGNITE the wreck smolders, past COLLAPSE the frame gives. */
 const IGNITE_FRACTION = 0.15;
@@ -35,6 +35,13 @@ interface MeshHouse {
   chipped: number;
   ignited: boolean;
   collapsed: boolean;
+  /** Shadow structure (궁): invisible while standing — a cheap merged
+   *  copy renders the look; chipped parts fly as REAL visible pieces and
+   *  the merged copy hides at collapse. */
+  shadow: boolean;
+  /** Backdrop structure: no per-bullet raycast (bbox approximation hits
+   *  it) — exact geometry tests are a near-house luxury. */
+  coarse: boolean;
 }
 
 interface FractureRecord {
@@ -94,13 +101,16 @@ export class MeshHouses {
     return this.houses.length;
   }
 
-  addHouse(root: THREE.Group, x: number, z: number): number {
+  addHouse(root: THREE.Group, x: number, z: number, opts?: { shadow?: boolean; coarse?: boolean }): number {
+    const shadow = opts?.shadow ?? false;
     root.updateMatrixWorld(true);
+    // Shadow parts stay invisible while standing (the merged copy shows).
+    if (shadow) root.visible = false;
     const box = new THREE.Box3().setFromObject(root);
     const parts: THREE.Mesh[] = [];
     root.traverse((object) => {
       const mesh = object as THREE.Mesh;
-      if (mesh.isMesh && mesh.visible) parts.push(mesh);
+      if (mesh.isMesh && (!shadow || mesh.visible)) parts.push(mesh);
     });
     const house: MeshHouse = {
       index: this.houses.length,
@@ -114,11 +124,28 @@ export class MeshHouses {
       chipped: 0,
       ignited: false,
       collapsed: false,
+      shadow,
+      coarse: opts?.coarse ?? false,
     };
     this.houses.push(house);
     this.stampWindowGlow(house);
     return house.index;
   }
+
+  /** Fires after reset (World re-shows the merged twin). */
+  onReset: (() => void) | null = null;
+  private resetCallback: (() => void) | null = null;
+
+  /** Fires when a house fully collapses (World hides the merged twin). */
+  set onCollapse(callback: (index: number) => void) {
+    this.collapseCallback = callback;
+  }
+
+  set onResetCallback(callback: () => void) {
+    this.resetCallback = callback;
+  }
+
+  private collapseCallback: ((index: number) => void) | null = null;
 
   /** 창호지 — read the builder-authored opening glow anchors straight off
    *  the meshes (cheoma writes userData.openingGlowAnchors; the facade
@@ -185,6 +212,7 @@ export class MeshHouses {
       fraction: +this.fraction(house.index).toFixed(3),
       ignited: house.ignited,
       collapsed: house.collapsed,
+      shadow: house.shadow,
     }));
   }
 
@@ -203,7 +231,7 @@ export class MeshHouses {
    *  ray sees what the player sees). */
   raycast(index: number, origin: THREE.Vector3, dir: THREE.Vector3, far: number): { x: number; y: number; z: number; dist: number } | null {
     const house = this.houses[index];
-    if (!house || house.collapsed) return null;
+    if (!house || house.collapsed || house.coarse) return null;
     this.raycaster.set(origin, dir);
     this.raycaster.far = far;
     const hits = this.raycaster.intersectObject(house.root, true);
@@ -245,7 +273,7 @@ export class MeshHouses {
       this.fracturePart(house, mesh, nx, nz, 8.5 + rng() * 6.5, rng);
       house.chipped += 1;
     }
-    this.killGlowFor(mesh => entry.includes(mesh) || exit.includes(mesh));
+    this.killGlowFor(house, mesh => entry.includes(mesh) || exit.includes(mesh));
     return house.chipped / house.totalParts;
   }
 
@@ -283,6 +311,7 @@ export class MeshHouses {
     house.parts.length = 0;
     house.root.visible = false;
     this.killGlowForHouse(house.index);
+    this.collapseCallback?.(house.index);
   }
 
   /** Detach one mesh into a scene pivot at its bbox center and hand it to
@@ -308,6 +337,7 @@ export class MeshHouses {
     this.scene.add(pivot);
     pivot.updateMatrixWorld(true);
     pivot.attach(mesh);
+    if (house.shadow) mesh.visible = true; // the piece becomes real
     const len = Math.hypot(dirX, dirZ) || 1;
     this.physics?.spawnPiece(
       pivot,
@@ -319,12 +349,13 @@ export class MeshHouses {
       (dirZ / len) * speed * (0.7 + rng() * 0.6) + (rng() - 0.5) * 3,
       (rng() - 0.5) * 12, (rng() - 0.5) * 9, (rng() - 0.5) * 12,
     );
-    this.killGlowFor(match => match === mesh);
+    this.killGlowFor(house, match => match === mesh);
   }
 
   /** A fractured mesh takes its 창호지 panes with it (멀쩡한 창만 남지
    *  않게) — anchors ride the owning mesh or its direct panel group. */
-  private killGlowFor(owns: (mesh: THREE.Mesh) => boolean): void {
+  private killGlowFor(house: MeshHouse, owns: (mesh: THREE.Mesh) => boolean): void {
+    if (house.shadow) return; // merged twin still shows those windows
     let dirty = false;
     for (let s = 0; s < this.glowTotal; s += 1) {
       const owner = this.glowOwner[s];
@@ -393,13 +424,17 @@ export class MeshHouses {
       house.chipped = 0;
       house.ignited = false;
       house.collapsed = false;
-      house.root.visible = true;
+      house.root.visible = !house.shadow;
       house.parts.length = 0;
       house.root.traverse((object) => {
         const mesh = object as THREE.Mesh;
-        if (mesh.isMesh && mesh.visible) house.parts.push(mesh);
+        if (mesh.isMesh && (mesh.visible || house.shadow)) {
+          if (house.shadow) mesh.visible = false;
+          house.parts.push(mesh);
+        }
       });
     }
+    this.resetCallback?.();
     // Panes revive with their houses (owners kept; matrices still match —
     // every fractured mesh restored the exact transform they were stamped at).
     this.glowDead.fill(0);

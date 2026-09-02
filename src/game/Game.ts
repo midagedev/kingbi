@@ -1296,13 +1296,13 @@ export class Game {
     const record = this.world.houseRecord(index);
     if (!record) return;
     if (record.mesh >= 0) {
-      this.collapseMeshHouse(record.mesh);
+      this.collapseMeshHouse(record.mesh, record.palace === true);
       return;
     }
     const vox = this.world.voxelHouseManager();
     if (!vox || vox.isCollapsed(record.vox)) return;
     const center = vox.houseCenter(record.vox);
-    const isPalace = this.world.palaceVoxelIndex === record.vox;
+    const isPalace = record.palace === true;
     // A slice of the structure becomes REAL rigid bodies — the rest rides
     // the staged fall animation; the bodies pile where they land.
     this.chewScratch.length = 0;
@@ -1343,13 +1343,14 @@ export class Game {
   /** 마당 한옥 붕괴 — every remaining 부재 gives at once: the frame
    *  comes apart into rigid pieces that crash outward, the wreck burns,
    *  and the yard keeps the pile until dawn. */
-  private collapseMeshHouse(meshIndex: number): void {
+  private collapseMeshHouse(meshIndex: number, isPalace = false): void {
     const mesh = this.world.meshHouseManager();
     if (!mesh || mesh.isCollapsed(meshIndex)) return;
     const center = mesh.houseCenter(meshIndex);
     mesh.collapse(meshIndex, () => this.rng());
     // Grit fills the gaps between the big pieces — the crash reads solid.
-    for (let i = 0; i < 26; i += 1) {
+    const grit = isPalace ? 60 : 26;
+    for (let i = 0; i < grit; i += 1) {
       const a = this.rng() * Math.PI * 2;
       const t = this.rng();
       this.rubble?.spawnRubble(
@@ -1359,8 +1360,8 @@ export class Game {
         (this.rng() - 0.5) * 12, (this.rng() - 0.5) * 10, (this.rng() - 0.5) * 12,
       );
     }
-    this.fires?.ignite(center.x, this.world.queries().heightAt(center.x, center.z), center.z, 1, () => this.rng());
-    this.rubble?.kickNear(center.x, center.y, center.z, 6, 10);
+    this.fires?.ignite(center.x, this.world.queries().heightAt(center.x, center.z), center.z, isPalace ? 1.7 : 1, () => this.rng());
+    this.rubble?.kickNear(center.x, center.y, center.z, 6, isPalace ? 20 : 10);
     this.shakeTrauma = Math.min(1, this.shakeTrauma + 0.5);
     this.fovPunch = Math.min(1.4, this.fovPunch + 0.6);
     this.world.impactAberration(1.4);
@@ -1370,7 +1371,7 @@ export class Game {
     this.audio.roar();
     this.vfx.demolitionDust(center.x, center.y + 2, center.z, 22, () => this.rng());
     this.debris?.chipBurst(center.x, center.y + 1, center.z, 0, 0, 22, () => this.rng());
-    this.sealCharge = Math.min(1, this.sealCharge + 0.2);
+    this.sealCharge = Math.min(1, this.sealCharge + (isPalace ? 0.5 : 0.2));
     this.world.clearObstaclesNear(center.x, center.z, 12);
   }
 
@@ -2196,6 +2197,8 @@ export class Game {
       villageMaterialInfo: () => this.world.villageMaterialInfo(),
       /** Draw census by scene root — the "what eats the frame" probe. */
       sceneCensus: () => this.world.sceneCensus(),
+      palacePlan: () => this.world.palacePlan(),
+      palaceMergedStats: () => this.world.palaceMergedStats(),
       /** Toggle a composer pass by name (WebKit/Safari pipeline debugging). */
       setPostPassEnabled: (name: string, enabled: boolean) =>
         this.world.setPostPassEnabled(name, enabled),
@@ -2212,6 +2215,7 @@ export class Game {
         return {
           villageSeed: this.villageSeed,
           palaceVoxelIndex: this.world.palaceVoxelIndex,
+          palaceMeshIndex: this.world.palaceMeshIndex,
           palace: q.palaceCenter(),
           bunker: {
             x: +this.bunkerX.toFixed(1),

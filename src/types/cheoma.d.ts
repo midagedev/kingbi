@@ -53,7 +53,10 @@ declare module '@cheoma/api/village.js' {
     bounds?: { min?: { x: number; z: number }; max?: { x: number; z: number } };
     features?: {
       cityWall?: CheomaCityWallSpec;
-      palace?: { x: number; z: number; tier?: string } & Record<string, unknown>;
+      palace?: {
+        x: number; z: number; tier?: string; variant?: string; seed?: number;
+        plotW?: number; plotD?: number; frontDir?: { x: number; z: number };
+      } & Record<string, unknown>;
       [key: string]: unknown;
     };
   }
@@ -168,4 +171,17 @@ declare module '@cheoma/api/building.js' {
   export const PRESETS: Record<string, Record<string, unknown> & { style?: string }>;
   export function buildBuilding(params: Record<string, unknown>): THREE.Group;
   export function disposeBuilding(root: THREE.Object3D): void;
+  export function buildPalaceCompound(params?: {
+    w?: number;
+    d?: number;
+    tier?: string;
+    variant?: string;
+    seed?: number;
+    mats?: unknown;
+    merge?: boolean;
+    presetOverrides?: Record<string, unknown> | null;
+    shareMats?: boolean;
+    dancheong?: Record<string, unknown> | null;
+  }): THREE.Group;
+  export function disposePalaceCompound(root: THREE.Object3D): void;
 }
