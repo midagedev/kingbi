@@ -3,14 +3,14 @@ import * as THREE from 'three';
 /**
  * 무너진 집에 붙는 화재 — the night escalates: every collapsed building
  * burns until dawn. Each fire is a cluster of toneMapped-off flame boxes
- * over a big warm additive GLOW disc (the light spilling across the yard)
- * and — the hero shot — every 원귀 near a fire drags a LONG FAKED shadow
- * streak across the ground, pointing away from the flames.
+ * over a big warm additive GLOW disc (the light spilling across the yard),
+ * plus the voxel 색광 bake that warms the walls it reaches.
  *
  * Cost discipline: NO per-fire PointLights (a pair cost ~8fps in stress
- * per-pixel math — the lantern lesson). One shared desktop-only light
- * follows the nearest fire so bodies and rubble actually warm up; the
- * shadows themselves are tapered alpha quads, free.
+ * per-pixel math — the lantern lesson) and NO shadow maps — the zombie
+ * streak shadows read fake and bought the frame rate down, so the fire
+ * spot lights only. One shared desktop-only light follows the nearest
+ * fire so bodies and rubble actually warm up.
  */
 interface Fire {
   x: number;
@@ -40,37 +40,6 @@ interface FlameRow {
 
 const MAX_FIRES = 8;
 const MAX_FLAME_ROWS = 110;
-const MAX_SHADOWS = 320;
-
-/** Vertical alpha ramp for the streak: opaque at the feet (v0), gone at
- *  the tip — a stretched soft shadow, not a black plank. */
-function buildStreakTexture(): THREE.Texture {
-  const w = 64;
-  const h = 256;
-  const canvas = document.createElement('canvas');
-  canvas.width = w;
-  canvas.height = h;
-  const ctx = canvas.getContext('2d');
-  if (ctx) {
-    // alphaMap samples the GREEN channel — the ramp must be WHITE, not
-    // black-transparent (black reads g=0: perfectly invisible streaks).
-    const gradient = ctx.createLinearGradient(0, 0, 0, h);
-    gradient.addColorStop(0.0, 'rgba(255,255,255,0)');
-    gradient.addColorStop(0.4, 'rgba(255,255,255,0.85)');
-    gradient.addColorStop(1.0, 'rgba(255,255,255,1)');
-    ctx.fillStyle = gradient;
-    // Tapered trapezoid: full width at the feet, near-point at the tip.
-    ctx.beginPath();
-    ctx.moveTo(w * 0.14, 0);
-    ctx.lineTo(w * 0.86, 0);
-    ctx.lineTo(w * 0.56, h);
-    ctx.lineTo(w * 0.44, h);
-    ctx.closePath();
-    ctx.fill();
-  }
-  const texture = new THREE.CanvasTexture(canvas);
-  return texture;
-}
 
 /** Soft round warm spill — same family as the lantern pools, bigger. */
 function buildGlowTexture(): THREE.Texture {
@@ -98,12 +67,9 @@ export class FireField {
   private readonly rows: FlameRow[] = [];
   private readonly flameMesh: THREE.InstancedMesh;
   private readonly glowTexture: THREE.Texture;
-  private readonly streakTexture: THREE.Texture;
-  private readonly shadowMesh: THREE.InstancedMesh;
-  /** Desktop-only warm spot over the nearest fire — the ONE light with a
-   *  real shadow map: the burning house, marching 원귀 and the corpse
-   *  heaps all cast true shadows radiating away from the flames. Other
-   *  lights (secondary fires, lanterns) cast via the streak system. */
+  /** Desktop-only warm spot over the nearest fire — LIGHT ONLY, no shadow
+   *  map: the streak shadows and the alternating-frame 1024² render both
+   *  read as fake/frame-cost and were retired (more 좀비, more physics). */
   private readonly light: THREE.SpotLight | null;
   private readonly lightTarget: THREE.Object3D | null;
   private readonly matrix = new THREE.Matrix4();
@@ -113,7 +79,6 @@ export class FireField {
   private readonly scale = new THREE.Vector3();
   private readonly color = new THREE.Color();
   private time = 0;
-  private shadowFrame = 0;
 
   constructor(scene: THREE.Scene, compact: boolean, focusX: number, focusZ: number) {
     const flameGeometry = new THREE.BoxGeometry(1, 1, 1);
@@ -126,42 +91,15 @@ export class FireField {
     scene.add(this.flameMesh);
 
     this.glowTexture = buildGlowTexture();
-    this.streakTexture = buildStreakTexture();
-
-    const shadowGeometry = new THREE.PlaneGeometry(1, 1);
-    const shadowMaterial = new THREE.MeshBasicMaterial({
-      color: 0x000000,
-      alphaMap: this.streakTexture,
-      transparent: true,
-      opacity: 0.72,
-      depthWrite: false,
-    });
-    this.shadowMesh = new THREE.InstancedMesh(shadowGeometry, shadowMaterial, MAX_SHADOWS);
-    this.shadowMesh.frustumCulled = false;
-    this.shadowMesh.renderOrder = 2;
-    this.shadowMesh.count = 0;
-    this.shadowMesh.name = 'fire-shadows';
-    scene.add(this.shadowMesh);
 
     this.light = compact ? null : new THREE.SpotLight(0xff8a3c, 0, 34, 1.15, 0.6, 2);
     if (this.light) {
       this.light.position.set(focusX, 9, focusZ);
-      this.light.castShadow = true;
-      this.light.shadow.autoUpdate = false; // toggled every other frame below
-      this.light.shadow.mapSize.set(1024, 1024);
-      this.light.shadow.camera.near = 2;
-      this.light.shadow.camera.far = 34;
-      this.light.shadow.bias = -0.0008;
-      this.light.shadow.normalBias = 0.04;
       this.lightTarget = new THREE.Object3D();
       this.light.target = this.lightTarget;
-      // Layer 1 = the voxel-house mass: the spot LIGHTS it and takes its
-      // real shadows; the moon map skips it (cache stays cheap mid-fight).
-      // Layer 1 only: the fire map carries the voxel houses and rubble;
-      // zombie fire-shadows stay with the streak system (the horde's draw
-      // cost in a second per-frame map was the stress crater).
+      // Layer 1 = the voxel-house mass: the spot lights the burning walls
+      // (warm-up on top of the 색광 bake).
       this.light.layers.enable(1);
-      this.light.shadow.camera.layers.enable(1);
       scene.add(this.light, this.lightTarget);
     } else {
       this.lightTarget = null;
@@ -328,14 +266,9 @@ export class FireField {
         }
       }
       if (best && this.lightTarget) {
-        // Half-rate shadow refresh (30fps): the voxel-house vertex load in
-        // the shadow pass is the price of real fire shadows — halved here,
-        // imperceptible at night.
-        this.shadowFrame += 1;
-        this.light.shadow.needsUpdate = (this.shadowFrame & 1) === 0;
         const flicker = 0.85 + 0.15 * Math.sin(this.time * 7.7) * Math.sin(this.time * 3.1);
-        // The spot rides high above the flames: wide cone, shadows radiate
-        // outward from the fire across the whole glow pool.
+        // The spot rides high above the flames: wide cone, warm light
+        // radiating outward from the fire across the whole glow pool.
         this.light.position.lerp(this.pos.set(best.x, best.y + 7.5 + best.scale * 1.5, best.z), Math.min(1, delta * 4));
         this.lightTarget.position.lerp(this.pos.set(best.x, best.y + 0.6, best.z), Math.min(1, delta * 4));
         this.lightTarget.updateMatrixWorld();
@@ -372,82 +305,9 @@ export class FireField {
     return popped;
   }
 
-  /** 광원마다 그림자 — every active 원귀 casts a tapered streak PER nearby
-   *  light, pointing away from it: up to the two strongest sources (the
-   *  secondary streak reads weaker — shorter and thinner), fires joined by
-   *  the yard lanterns as steady weak sources. The nearest fire ALSO gets
-   *  real shadow-mapped light (see the spot above); the streaks cover
-   *  every other light at zero per-light cost. */
-  updateShadows(
-    eachZombie: (visit: (x: number, z: number, state: string, type: string) => void) => void,
-    groundAt: (x: number, z: number) => number,
-    staticSources: Array<{ x: number; z: number }> = [],
-  ): void {
-    if (this.fires.length === 0 && staticSources.length === 0) {
-      if (this.shadowMesh.count !== 0) this.shadowMesh.count = 0;
-      return;
-    }
-    let written = 0;
-    const scratch: Array<{ x: number; z: number; type: string }> = [];
-    eachZombie((x, z, state, type) => {
-      if (state === 'dormant') return;
-      scratch.push({ x, z, type });
-    });
-    interface Source { x: number; z: number; radius: number; power: number }
-    const sources: Source[] = [];
-    for (const fire of this.fires) {
-      sources.push({
-        x: fire.x, z: fire.z,
-        radius: (9 + 5 * fire.scale) * 1.45,
-        power: (fire.fade >= 0 ? Math.max(0, 1 - fire.fade / 2.6) : 1) * (0.7 + 0.3 * fire.scale),
-      });
-    }
-    for (const lantern of staticSources) {
-      sources.push({ x: lantern.x, z: lantern.z, radius: 6.5, power: 0.42 });
-    }
-    for (const zombie of scratch) {
-      let best: Source | null = null;
-      let bestScore = 0;
-      let second: Source | null = null;
-      let secondScore = 0;
-      for (const source of sources) {
-        const dx = zombie.x - source.x;
-        const dz = zombie.z - source.z;
-        const d = Math.hypot(dx, dz);
-        if (d > source.radius || d < 0.001) continue;
-        const score = (1 - d / source.radius) * source.power;
-        if (score > bestScore) {
-          second = best; secondScore = bestScore;
-          best = source; bestScore = score;
-        } else if (score > secondScore) {
-          second = source; secondScore = score;
-        }
-      }
-      for (const [source, weight] of [[best, 1], [second, 0.62]] as Array<[Source | null, number]>) {
-        if (!source || written >= MAX_SHADOWS) continue;
-        const dx = zombie.x - source.x;
-        const dz = zombie.z - source.z;
-        const d = Math.hypot(dx, dz) || 1;
-        const dirX = dx / d;
-        const dirZ = dz / d;
-        const length = Math.min(9, (1.6 + (1 - d / source.radius) * (5.0 + 4.0 * source.power)) * weight);
-        const baseWidth = zombie.type === 'brute' ? 1.1 : zombie.type === 'bloater' ? 0.9 : 0.62;
-        const width = baseWidth * (0.72 + 0.28 * weight);
-        this.euler.set(-Math.PI / 2, Math.atan2(-dirX, -dirZ), 0);
-        this.pos.set(zombie.x + dirX * (length * 0.5 + 0.25), groundAt(zombie.x, zombie.z) + 0.03, zombie.z + dirZ * (length * 0.5 + 0.25));
-        this.matrix.compose(this.pos, this.quat.setFromEuler(this.euler), this.scale.set(width, length, 1));
-        this.shadowMesh.setMatrixAt(written, this.matrix);
-        written += 1;
-      }
-    }
-    this.shadowMesh.count = written;
-    if (written > 0) this.shadowMesh.instanceMatrix.needsUpdate = true;
-  }
-
   /** Run restart: the yard is swept cold. */
   reset(): void {
     for (let i = this.fires.length - 1; i >= 0; i -= 1) this.removeFire(this.fires[i]);
-    this.shadowMesh.count = 0;
     if (this.light) this.light.intensity = 0;
   }
 
@@ -456,11 +316,7 @@ export class FireField {
     this.flameMesh.geometry.dispose();
     (this.flameMesh.material as THREE.Material).dispose();
     this.flameMesh.removeFromParent();
-    this.shadowMesh.geometry.dispose();
-    (this.shadowMesh.material as THREE.Material).dispose();
-    this.shadowMesh.removeFromParent();
     this.glowTexture.dispose();
-    this.streakTexture.dispose();
     this.light?.removeFromParent();
   }
 }

@@ -37,11 +37,6 @@ const CLAW_DPS = 5.5;
 const MAX_CLAW_ATTACKERS = 6;
 const AIM_ASSIST_RADIUS = 1.15;
 const SHOT_FORCE = 4.0;
-/** zombie-rag.jpg texel average, LINEAR (measured 125/117/104 sRGB) — the
- *  live horde's robe albedo gets this multiplied in by its fabric map; the
- *  corpse material has no texture, so we fold it into the instance color. */
-const RAG_AVG_LINEAR = new THREE.Color(0.205, 0.178, 0.138);
-const CORPSE_ROBE = new THREE.Color();
 
 interface Tuning extends DebugTuning {
   hitstopSeconds: number;
@@ -188,7 +183,7 @@ export class Game {
         cityWallSpec: () => null,
         palaceCenter: () => null,
       },
-      this.compact ? 420 : 950,
+      this.compact ? 420 : 1300,
       () => this.rng(),
     );
     this.tracers = new TracerPool(this.world.scene, 140);
@@ -254,10 +249,10 @@ export class Game {
     this.audio.setPhase('night');
     this.updateTitleBest();
     onReady(false, '원귀를 깨우는 중…');
-    this.rubble ??= new Box3dWorld(this.world.scene, 3072);
+    this.rubble ??= new Box3dWorld(this.world.scene, 4096);
     this.fires ??= new FireField(this.world.scene, this.compact, this.bunkerX, this.bunkerZ);
     // The flat slab sinks 4m below the terrain — the REAL floor is the
-    // terrain tile grid (the yard slopes; corpses must rest on visible
+    // terrain tile grid (the yard slopes; rubble must rest on visible
     // ground, not inside it).
     const physicsOk = await this.rubble.init(-26, this.bunkerGroundY - 4, 320);
     if (physicsOk) {
@@ -442,15 +437,11 @@ export class Game {
   private startWave(index: number): void {
     this.day = index;
     this.waveActive = true;
-    // 웨이브 단위 시체 정리 — the last wave's dead are swept as the next
-    // river arrives (the lull keeps the pile as the trophy; rubble stays
-    // all night — only the corpses go).
-    this.rubble?.clearCorpses();
     // Wave 1 stays survivable for a first-timer; the river swells fast after.
-    this.waveSpawnQueue = Math.min(this.compact ? 420 : 900, WAVE_BASE + (index - 1) * WAVE_STEP);
+    this.waveSpawnQueue = Math.min(this.compact ? 420 : 1200, WAVE_BASE + (index - 1) * WAVE_STEP);
     // Every 5th wave is 대격노 — the river overflows.
     const tide = index % 5 === 0;
-    if (tide) this.waveSpawnQueue = Math.min(this.compact ? 420 : 900, Math.round(this.waveSpawnQueue * 2.2));
+    if (tide) this.waveSpawnQueue = Math.min(this.compact ? 420 : 1200, Math.round(this.waveSpawnQueue * 2.2));
     // Variant quotas — wave 1 is pure fundamentals, then the zoo opens.
     // Bloaters arrive late and sparse: the 유폭 is a punctuation mark, not
     // punctuation.
@@ -1144,7 +1135,7 @@ export class Game {
     }
 
     // 관통 탄도 — the round tears through the piles on its way: chunks and
-    // corpses along the line kick back and skid (the hit itself still lands
+    // rubble along the line kicks back and skids (the hit itself still lands
     // on the zombie/house — debris never eats a bullet).
     const flight = Math.hypot(endX - muzzle.x, endZ - muzzle.z) || 30;
     this.rubble?.kickAlongRay(muzzle.x, muzzle.y, muzzle.z, dirX, shotSlope, dirZ, flight);
@@ -1400,34 +1391,6 @@ export class Game {
       this.gibs.burst(position.x, gibY, position.z, dirX, dirZ, elite ? 16 : 10, () => this.rng(), elite ? 1.3 : 1);
       this.vfx.bloodBurst(position.x, gibY, position.z, dirX, dirZ, elite ? 14 : 7, () => this.rng());
     }
-    // 시체 강체 — the body itself becomes a box3d corpse: it rides the shot,
-    // tumbles, and comes to rest ON the rubble heaps. Brutes hit heavier;
-    // bloaters detonate (no corpse — they ARE the blast).
-    if (type !== 'bloater' && this.rubble?.ready) {
-      const brute = type === 'brute';
-      const tint = this.rng();
-      const speed = (7.5 + this.rng() * 7) * (brute ? 0.55 : 1);
-      // 시체 색 = 로브(sRGB 저작값)를 선형 변환 후 zombie-rag 짜임 평균을
-      // 곱한다. setColorAt은 선형만 받으므로 sRGB 숫자를 그대로 넘기면 밤
-      // 블룸에서 하얗게 떠 보였다(the "시체가 하얀색" bug). 살아있는 원귀는
-      // 같은 로브가 텍스처까지 거쳐 훨씬 어둡다 — 시체가 그 아래로 떨어진다.
-      CORPSE_ROBE.setRGB(
-        brute ? 0.82 : type === 'runner' ? 0.585 + tint * 0.03
-          : type === 'shield' ? 0.53 : 0.7 + tint * 0.035 + (elite ? 0.05 : 0),
-        brute ? 0.8 : type === 'runner' ? 0.545 + tint * 0.03
-          : type === 'shield' ? 0.5 : 0.665 + tint * 0.03,
-        brute ? 0.75 : type === 'runner' ? 0.475 + tint * 0.03
-          : type === 'shield' ? 0.455 : 0.6 + tint * 0.03,
-        THREE.SRGBColorSpace,
-      ).multiply(RAG_AVG_LINEAR);
-      this.rubble.spawnCorpse(
-        position.x, gibY + 0.15, position.z,
-        this.rng() * Math.PI * 2, brute ? 2.8 : type === 'runner' ? 0.72 : type === 'shield' ? 1.05 : 1,
-        CORPSE_ROBE.r, CORPSE_ROBE.g, CORPSE_ROBE.b,
-        dirX * speed, 4.5 + this.rng() * 4, dirZ * speed,
-        (this.rng() - 0.5) * 10, (this.rng() - 0.5) * 8, (this.rng() - 0.5) * 10,
-      );
-    }
     if (this.splatSfxTimer <= 0) {
       this.splatSfxTimer = 0.07;
       this.audio.splat();
@@ -1565,7 +1528,6 @@ export class Game {
     this.physMs = this.physMs * 0.9 + (performance.now() - physT0) * 0.1;
     this.bloodYard?.update(delta);
     this.fires?.update(delta, this.bunkerX, this.bunkerZ);
-    this.fires?.updateShadows((visit) => this.horde.forEachActive(visit), groundAt, this.world.yardLanternSpots());
     // 색광 전파 원천 — 석등(정적 온기) + 활화재(규모·활력 가중)를 복셀
     // 베이크에 넘긴다: 닿는 벽이 전부 데워지고 구멍을 타고 방까지 스민다.
     this.voxelLights.length = 0;
@@ -1949,9 +1911,9 @@ export class Game {
           this.waveActive = true;
           this.day = 4;
           const dist = [18, this.spawnFar] as const;
-          this.horde.spawnWave(150, -Math.PI / 2 + (this.rng() - 0.5) * 0.8, 4, 0.2, 0.55, { brute: 2, bloater: 6, shield: 8, runner: 10 }, dist, { x: this.bunkerX, z: this.bunkerZ });
-          this.horde.spawnWave(160, -Math.PI / 2 + (this.rng() - 0.5) * 0.8, 4, 0.2, 0.75, undefined, dist, { x: this.bunkerX, z: this.bunkerZ });
-          // Physics stress: an airborne demolition raining while corpses
+          this.horde.spawnWave(190, -Math.PI / 2 + (this.rng() - 0.5) * 0.8, 4, 0.2, 0.55, { brute: 2, bloater: 6, shield: 8, runner: 10 }, dist, { x: this.bunkerX, z: this.bunkerZ });
+          this.horde.spawnWave(210, -Math.PI / 2 + (this.rng() - 0.5) * 0.8, 4, 0.2, 0.75, undefined, dist, { x: this.bunkerX, z: this.bunkerZ });
+          // Physics stress: an airborne demolition raining while bodies
           // pile under the seal — the box3d worst case in one frame budget.
           const houses = this.world.yardHouses();
           if (houses.length >= 2) {
@@ -2096,18 +2058,6 @@ export class Game {
       igniteFireAt: (x: number, z: number, scale = 1) => {
         this.fires?.ignite(x, this.world.queries().heightAt(x, z), z, scale, () => this.rng());
       },
-      /** Raw corpse instanceColor rows (colorspace QA). */
-      corpseColorRows: () => {
-        const mesh = this.rubble?.corpseMesh;
-        const buf = mesh?.instanceColor?.array;
-        if (!buf) return [] as number[][];
-        const rows: number[][] = [];
-        const n = Math.min(6, mesh.count);
-        for (let i = 0; i < n; i += 1) {
-          rows.push([+buf[i * 3].toFixed(3), +buf[i * 3 + 1].toFixed(3), +buf[i * 3 + 2].toFixed(3)]);
-        }
-        return rows;
-      },
       /** Force the structure collapse of the house nearest a point. */
       collapseHouseAt: (x: number, z: number) => {
         const indices = this.world.houseIndicesNear(x, z, 8);
@@ -2193,8 +2143,6 @@ export class Game {
       spin: this.spin,
       kills: this.kills,
       rubble: this.rubble ? this.rubble.bodyCount : -2,
-      corpses: this.rubble ? this.rubble.corpseCount : -2,
-      corpseVisual: this.rubble ? this.rubble.corpseVisual : -2,
       rubbleVisual: this.rubble ? this.rubble.rubbleVisual : -2,
       windows: this.world.voxelHouseManager()?.glowMesh.count ?? -1,
       physMs: +this.physMs.toFixed(2),

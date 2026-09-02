@@ -61,8 +61,6 @@ interface ThreeGameTestHooks {
   voxelLightRows(houseIndex: number): Array<{ base: number[]; painted: number[]; l: number }>;
   /** Drop a live fire at a world point without collapsing (색광 QA). */
   igniteFireAt(x: number, z: number, scale?: number): void;
-  /** Raw corpse instanceColor rows, linear (colorspace QA). */
-  corpseColorRows(): number[][];
   /** Detonate the 부적 봉인 at a world point (sigil + purge QA). */
   fireSealAt(x: number, z: number): void;
   /** Compose the 밤의 그림 card as a PNG data URL (painting QA). */

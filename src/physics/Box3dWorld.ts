@@ -1,11 +1,11 @@
 import * as THREE from 'three';
-import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 
 /**
- * box3d 러블 + 시체 — Erin Catto's Box3D (alpha) compiled to single-threaded
- * WASM (wasm/bridge.c): chewed house cubes, collapse debris AND fallen 원귀
- * become REAL rigid bodies that tumble, collide and PILE — corpses come to
- * rest on the rubble heaps. No fallback physics — this is the chunk sim.
+ * box3d 러블 — Erin Catto's Box3D (alpha) compiled to single-threaded
+ * WASM (wasm/bridge.c): chewed house cubes and collapse debris become
+ * REAL rigid bodies that tumble, collide and PILE. Fallen 원귀 ride the
+ * horde's own dying animation instead (the corpse voxelization was
+ * retired — 더 많은 좀비와 물리효과로 예산 이동). No fallback physics.
  * In-app-browser rules: no SharedArrayBuffer (no threads), streaming
  * instantiate with arrayBuffer fallback.
  *
@@ -34,8 +34,6 @@ interface Box3dModule {
 
 interface BodySlot {
   active: boolean;
-  /** 0 = rubble chunk, 1 = corpse. */
-  layer: 0 | 1;
   sx: number;
   sy: number;
   sz: number;
@@ -99,62 +97,17 @@ class RowLedger {
   }
 }
 
-/** Corpse hull half-extents, measured against the live 원귀 (Horde render
- *  scale): normals stand ~1.4m tall with a 0.64m hem — a slumped body
- *  occupies ~78% of standing height. Body lies along +X, 1.11m long. */
-const CORPSE_HX = 0.56;
-const CORPSE_HY = 0.17;
-const CORPSE_HZ = 0.3;
-/** Physics cap for corpses (rubble shares the rest of the C pool); the
- *  visual ledger lets frozen bodies exceed it. */
-const CORPSE_PHYSICS_MAX = 900;
-/** Visual budgets — the night's whole massacre and demolition stays on
- *  screen; beyond this the OLDEST frozen visuals recycle. */
-const RUBBLE_ROWS = 8192;
-const CORPSE_ROWS = 2048;
+/** Visual budget — the night's whole demolition stays on screen; beyond
+ *  this the OLDEST frozen visuals recycle. */
+const RUBBLE_ROWS = 12288;
 /** Rubble renders inset from its physics hull: resting cubes touch with
  *  EXACTLY coplanar faces and z-fight into one flickering blob — a 14%
  *  visual gap keeps every chunk individually readable (and reads ≤ the
  *  wall cell it came from). Physics stays full-size for stable piles. */
 const RUBBLE_VISUAL = 0.86;
 
-/** Lying 원귀 measured to match the standing one: thin legs, coat-spread
- *  torso, horned head, arms slack at the sides — merged non-indexed (the
- *  mergeGeometries constraint) into one draw per corpse instance. Each
- *  part carries a vertex-color tint (head pale, hem dark) so the single
- *  instanceColor per body still reads as a dressed figure, not a gray
- *  box. */
-function buildCorpseGeometry(): THREE.BufferGeometry {
-  const parts = [
-    [0.5, 0.17, 0.24, -0.32, -0.02, 0, 0.88], // legs (folded shins)
-    [0.42, 0.34, 0.5, 0.13, 0, 0, 1.0], // torso + coat
-    [0.3, 0.12, 0.58, 0.02, -0.1, 0, 0.82], // coat hem flare
-    [0.2, 0.2, 0.2, 0.44, 0.04, 0.05, 1.14], // horned head
-    [0.36, 0.11, 0.12, 0.18, 0.08, 0.3, 0.95], // arm
-    [0.36, 0.11, 0.12, 0.18, 0.08, -0.3, 0.95], // arm
-  ].map(([w, h, d, x, y, z, tint]) => {
-    const box = new THREE.BoxGeometry(w, h, d);
-    box.translate(x, y, z);
-    const nonIndexed = box.toNonIndexed();
-    box.dispose();
-    const vertexCount = nonIndexed.attributes.position.count;
-    const tints = new Float32Array(vertexCount * 3);
-    for (let i = 0; i < tints.length; i += 3) {
-      tints[i] = tint;
-      tints[i + 1] = tint;
-      tints[i + 2] = tint;
-    }
-    nonIndexed.setAttribute('color', new THREE.BufferAttribute(tints, 3));
-    return nonIndexed;
-  });
-  const merged = mergeGeometries(parts, false) ?? parts[0];
-  for (const part of parts) part.dispose();
-  return merged;
-}
-
 export class Box3dWorld {
   readonly mesh: THREE.InstancedMesh;
-  readonly corpseMesh: THREE.InstancedMesh;
   private module: Box3dModule | null = null;
   private readonly slots: BodySlot[] = [];
   private readonly matrix = new THREE.Matrix4();
@@ -162,12 +115,10 @@ export class Box3dWorld {
   private readonly quat = new THREE.Quaternion();
   private readonly scale = new THREE.Vector3();
   private readonly capColor = new THREE.Color();
-  /** Physics FIFO per layer — drives eviction order (oldest body leaves
-   *  physics first, its visual freezing in place). */
+  /** Physics FIFO — drives eviction order (oldest body leaves physics
+   *  first, its visual freezing in place). */
   private readonly rubbleOrder: number[] = [];
-  private readonly corpseOrder: number[] = [];
   private readonly rubbleRows: RowLedger;
-  private readonly corpseRows: RowLedger;
   /** Last frame's states run (base index + count in HEAPF32) — the kick
    *  ray-test reads body positions straight from it, no extra wasm call. */
   private statesBase = -1;
@@ -182,22 +133,13 @@ export class Box3dWorld {
     this.mesh.count = 0;
     this.mesh.name = 'box3d-rubble';
     for (let i = 0; i < capacity; i += 1) {
-      this.slots.push({ active: false, layer: 0, sx: 0.2, sy: 0.2, sz: 0.2, r: 1, g: 1, b: 1, needsWrite: true });
+      this.slots.push({ active: false, sx: 0.2, sy: 0.2, sz: 0.2, r: 1, g: 1, b: 1, needsWrite: true });
       this.hide(this.mesh, i);
     }
 
-    const corpseGeometry = buildCorpseGeometry();
-    const corpseMaterial = new THREE.MeshStandardMaterial({ roughness: 1, metalness: 0, envMapIntensity: 0.18, vertexColors: true });
-    this.corpseMesh = new THREE.InstancedMesh(corpseGeometry, corpseMaterial, CORPSE_ROWS);
-    this.corpseMesh.frustumCulled = false;
-    this.corpseMesh.receiveShadow = true;
-    this.corpseMesh.count = 0;
-    this.corpseMesh.name = 'box3d-corpses';
-
     this.rubbleRows = new RowLedger(capacity, RUBBLE_ROWS);
-    this.corpseRows = new RowLedger(capacity, CORPSE_ROWS);
 
-    scene.add(this.mesh, this.corpseMesh);
+    scene.add(this.mesh);
   }
 
   /** Load + instantiate the wasm bridge. Resolves false only if the
@@ -243,19 +185,9 @@ export class Box3dWorld {
     return this.slots.length;
   }
 
-  get corpseCount(): number {
-    let count = 0;
-    for (const slot of this.corpseOrder) if (this.slots[slot]?.active) count += 1;
-    return count;
-  }
-
   /** Visual rows ever claimed (live + frozen) — the pile-growth probe. */
   get rubbleVisual(): number {
     return this.rubbleRows.rowCount;
-  }
-
-  get corpseVisual(): number {
-    return this.corpseRows.rowCount;
   }
 
   /** Bodies currently simulating (QA/perf probe). */
@@ -264,8 +196,8 @@ export class Box3dWorld {
   }
 
   /** Terrain-following physics floor: the yard slopes 0.4→4.1m north of
-   *  the gun, so a single flat slab buries every corpse and rubble chunk
-   *  in the kill field (the "시체가 안 쌓인다" bug). 12m tiles sampled from
+   *  the gun, so a single flat slab buries every rubble chunk in the
+   *  kill field. 12m tiles sampled from
    *  heightAt; the old flat slab stays deep below as the outer fallback. */
   addTerrainTiles(
     heightAt: (x: number, z: number) => number,
@@ -300,76 +232,51 @@ export class Box3dWorld {
     vx: number, vy: number, vz: number,
     avx = 0, avy = 0, avz = 0,
   ): void {
-    const slot = this.addBody(x, y, z, half, half, half, 0, vx, vy, vz, avx, avy, avz, this.rubbleOrder);
+    const slot = this.addBody(x, y, z, half, half, half, 0, vx, vy, vz, avx, avy, avz);
     if (slot < 0) return;
     const edge = half * 2;
     const row = this.rubbleRows.claim(slot);
-    this.register(slot, 0, edge * RUBBLE_VISUAL, edge * RUBBLE_VISUAL, edge * RUBBLE_VISUAL, r, g, b, this.mesh, row);
+    this.register(slot, edge * RUBBLE_VISUAL, edge * RUBBLE_VISUAL, edge * RUBBLE_VISUAL, r, g, b, this.mesh, row);
     this.mesh.count = Math.max(this.mesh.count, this.rubbleRows.rowCount);
-  }
-
-  /** Spawn a fallen 원귀 — elongated hull, yaw spread; evicted bodies
-   *  freeze into the corpse field instead of blinking away. */
-  spawnCorpse(
-    x: number, y: number, z: number, yaw: number, scale: number,
-    r: number, g: number, b: number,
-    vx: number, vy: number, vz: number,
-    avx: number, avy: number, avz: number,
-  ): void {
-    while (this.corpseCount >= CORPSE_PHYSICS_MAX) this.evictOldest(this.corpseOrder);
-    const slot = this.addBody(
-      x, y, z, CORPSE_HX * scale, CORPSE_HY * scale, CORPSE_HZ * scale, yaw,
-      vx, vy, vz, avx, avy, avz, this.corpseOrder,
-    );
-    if (slot < 0) return;
-    const row = this.corpseRows.claim(slot);
-    this.register(slot, 1, scale, scale, scale, r, g, b, this.corpseMesh, row);
-    this.corpseMesh.count = Math.max(this.corpseMesh.count, this.corpseRows.rowCount);
   }
 
   private addBody(
     x: number, y: number, z: number, hx: number, hy: number, hz: number, yaw: number,
     vx: number, vy: number, vz: number,
     avx: number, avy: number, avz: number,
-    order: number[],
   ): number {
     const module = this.module;
     if (!module?._bx_add_box) return -1;
     let slot = module._bx_add_box(x, y, z, hx, hy, hz, yaw, vx, vy, vz, avx, avy, avz);
     if (slot < 0) {
-      this.evictOldest(order);
+      this.evictOldest();
       slot = module._bx_add_box(x, y, z, hx, hy, hz, yaw, vx, vy, vz, avx, avy, avz);
     }
-    if (slot >= 0) order.push(slot);
+    if (slot >= 0) this.rubbleOrder.push(slot);
     return slot;
   }
 
-  private evictOldest(order: number[]): void {
+  private evictOldest(): void {
     const module = this.module;
-    while (order.length > 0) {
-      const oldest = order.shift()!;
+    while (this.rubbleOrder.length > 0) {
+      const oldest = this.rubbleOrder.shift()!;
       if (!this.slots[oldest]?.active) continue;
       module?._bx_remove?.(oldest);
       this.slots[oldest].active = false;
       // The visual FREEZES in place — piles accumulate all night.
-      if (this.slots[oldest].layer === 0) {
-        this.rubbleRows.freeze(oldest);
-      } else {
-        this.corpseRows.freeze(oldest);
-      }
+      this.rubbleRows.freeze(oldest);
       return;
     }
   }
 
   private register(
-    slot: number, layer: 0 | 1,
+    slot: number,
     sx: number, sy: number, sz: number,
     r: number, g: number, b: number,
     mesh: THREE.InstancedMesh, row: number,
   ): void {
     const record = this.slots[slot];
     record.active = true;
-    record.layer = layer;
     record.sx = sx;
     record.sy = sy;
     record.sz = sz;
@@ -421,25 +328,20 @@ export class Box3dWorld {
       if (!record?.active) continue;
       const awakeBody = tagged - slot > 0.25 || record.needsWrite;
       if (!awakeBody) continue;
-      const row = record.layer === 0 ? this.rubbleRows.rowOf(slot) : this.corpseRows.rowOf(slot);
+      const row = this.rubbleRows.rowOf(slot);
       if (row < 0) continue;
       this.pos.set(states[o], states[o + 1], states[o + 2]);
       this.quat.set(states[o + 3], states[o + 4], states[o + 5], states[o + 6]);
       this.scale.set(record.sx, record.sy, record.sz);
       this.matrix.compose(this.pos, this.quat, this.scale);
-      if (record.layer === 0) {
-        this.mesh.setMatrixAt(row, this.matrix);
-        this.mesh.instanceMatrix.needsUpdate = true;
-      } else {
-        this.corpseMesh.setMatrixAt(row, this.matrix);
-        this.corpseMesh.instanceMatrix.needsUpdate = true;
-      }
+      this.mesh.setMatrixAt(row, this.matrix);
+      this.mesh.instanceMatrix.needsUpdate = true;
       record.needsWrite = false;
     }
   }
 
   /** 관통 탄도 — the gatling shreds THROUGH the piles: every rubble chunk
-   *  or corpse the line crosses gets kicked back along the shot (and wakes
+   *  rubble chunk the line crosses gets kicked back along the shot (and wakes
    *  up). Gameplay never blocks on debris — the bullet keeps its zombie /
    *  house target; the piles just react. Reads positions from the cached
    *  states run; jolt variance is a slot-hash (deterministic, no rng). */
@@ -464,7 +366,7 @@ export class Box3dWorld {
       const rx = px - dx * t;
       const ry = py - dy * t;
       const rz = pz - dz * t;
-      const radius = record.layer === 0 ? record.sx * 0.62 : 0.42 * record.sx;
+      const radius = record.sx * 0.62;
       if (rx * rx + ry * ry + rz * rz > radius * radius) continue;
       hits.push({ slot, t });
     }
@@ -475,7 +377,7 @@ export class Box3dWorld {
       const { slot } = hits[i];
       const record = this.slots[slot];
       const variance = 0.72 + 0.56 * ((slot * 0.618) % 1);
-      const power = (record.layer === 0 ? 8.5 : 4.2) * variance;
+      const power = 8.5 * variance;
       module._bx_kick?.(
         slot,
         dx * power, 1.6 + power * 0.22, dz * power,
@@ -524,22 +426,6 @@ export class Box3dWorld {
     return kicked;
   }
 
-  /** Wave sweep: corpses clear between waves (they'd bury the yard by
-   *  dawn), rubble STAYS — the demolition record persists all night. */
-  clearCorpses(): void {
-    const module = this.module;
-    for (const slot of this.corpseOrder) {
-      if (!this.slots[slot]?.active) continue;
-      module?._bx_remove?.(slot);
-      this.slots[slot].active = false;
-    }
-    this.corpseOrder.length = 0;
-    this.corpseRows.reset();
-    this.corpseMesh.count = 0;
-    for (let row = 0; row < CORPSE_ROWS; row += 1) this.hide(this.corpseMesh, row);
-    this.corpseMesh.instanceMatrix.needsUpdate = true;
-  }
-
   /** Run restart: bodies gone, instances hidden — the yard is swept. */
   reset(): void {
     this.module?._bx_clear?.();
@@ -549,23 +435,15 @@ export class Box3dWorld {
       this.hide(this.mesh, i);
     }
     this.rubbleOrder.length = 0;
-    this.corpseOrder.length = 0;
     this.rubbleRows.reset();
-    this.corpseRows.reset();
     this.mesh.count = 0;
-    this.corpseMesh.count = 0;
     for (let row = 0; row < RUBBLE_ROWS; row += 1) this.hide(this.mesh, row);
-    for (let row = 0; row < CORPSE_ROWS; row += 1) this.hide(this.corpseMesh, row);
     this.mesh.instanceMatrix.needsUpdate = true;
-    this.corpseMesh.instanceMatrix.needsUpdate = true;
   }
 
   dispose(): void {
     this.mesh.geometry.dispose();
     (this.mesh.material as THREE.Material).dispose();
     this.mesh.removeFromParent();
-    this.corpseMesh.geometry.dispose();
-    (this.corpseMesh.material as THREE.Material).dispose();
-    this.corpseMesh.removeFromParent();
   }
 }

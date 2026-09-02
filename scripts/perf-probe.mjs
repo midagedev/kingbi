@@ -26,7 +26,6 @@ const report = await page.evaluate(async ({ seconds }) => {
     fps: Number((frames / seconds).toFixed(1)),
     zombies: d2?.zombies,
     rubble: d2?.rubble,
-    corpses: d2?.corpses,
     physMs: d2?.physMs,
     physAwake: d2?.physAwake,
     updateMs: d2?.updateMs,
